@@ -29,7 +29,7 @@ https://github.com/user-attachments/assets/b56f4750-25c9-48fb-83ff-d58526711463
 
 ## 🔥 News
 
-- **[May 11, 2026]**: 🤗 Open-source ![Panorama Generation](https://img.shields.io/badge/Panorama_Generation-4285F4?style=flat-square) (HY-Pano 2.0) model weights & code!
+- **[May 11, 2026]**: 🤗 Open-source HY-Pano 2.0 inference code and model weights!
 - **[April 16, 2026]**: 🚀 Release HY-World 2.0 technical report & partial codes!
 - **[April 16, 2026]**: 🤗 Open-source WorldMirror 2.0 inference code and model weights!
 - **[Coming Soon]**: Release Full HY-World 2.0 (World Generation) inference code.

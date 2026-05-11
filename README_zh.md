@@ -30,7 +30,7 @@ https://github.com/user-attachments/assets/b56f4750-25c9-48fb-83ff-d58526711463
 
 ## 🔥 最新动态
 
-- **[2026年5月11日]**：🤗 开源 ![全景生成](https://img.shields.io/badge/Panorama_Generation-4285F4?style=flat-square)（HY-Pano 2.0）模型权重和代码！
+- **[2026年5月11日]**：🤗 开源 HY-Pano 2.0 推理代码和模型权重！
 - **[2026年4月16日]**：🚀 发布 HY-World 2.0 技术报告及部分代码！
 - **[2026年4月16日]**：🤗 开源 WorldMirror 2.0 推理代码和模型权重！
 - **[即将发布]**：发布完整的 HY-World 2.0（World Generation）推理代码。
