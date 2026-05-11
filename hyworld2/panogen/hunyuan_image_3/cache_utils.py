@@ -191,15 +191,9 @@ class CacheWithFreqsContainer(nn.Module):
         for i in range(len(self.get_all_filled_derivatives("high_freqs"))):
             high_freqs_output += (1 / math.factorial(i)) * self.get_derivative(i, "high_freqs") * (distance ** i)
         return reconstruction(low_freqs_output, high_freqs_output)
-    
+
     def hermite_formula(self, distance):
-        low_freqs_output = 0
-        high_freqs_output = 0
-        for i in range(len(self.get_all_filled_derivatives("low_freqs"))):
-            low_freqs_output += (1 / math.factorial(i)) * self.get_derivative(i, "low_freqs") * (distance ** i)
-        for i in range(len(self.get_all_filled_derivatives("high_freqs"))):
-            high_freqs_output += (1 / math.factorial(i)) * self.get_derivative(i, "high_freqs") * (distance ** i)
-        return reconstruction(low_freqs_output, high_freqs_output)
+        return self.taylor_formula(distance)
 
     def derivatives_computation(self, x, distance, low_freqs_order, high_freqs_order):
         '''
