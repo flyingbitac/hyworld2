@@ -46,32 +46,7 @@ It covers the last three stages of the full HY-World 2.0 pipeline:
 
 ### Installation
 
-```bash
-conda create -n worldgen python=3.11.15
-conda activate worldgen
-
-# 0. Init submodules (recastnavigation is managed as a git submodule)
-git submodule update --init --recursive
-
-# 1. Install base dependencies
-pip install -r requirements.txt
-
-# 2. Install flash-attn from source
-pip install flash-attn --no-build-isolation
-
-# 3. Install git-based dependencies (require torch/CUDA already installed)
-pip install --no-build-isolation -r requirements_git.txt
-
-# 4. Build gsplat_maskgaussian (custom gsplat variant with MaskGaussian support)
-cd third_party/gsplat_maskgaussian
-pip install -e . --no-build-isolation
-cd ../..
-
-# 5. Build Recast navmesh extension (for trajectory planning)
-cd third_party/navmesh
-pip install . --no-build-isolation
-cd ../..
-```
+Please follow the root installation guide in [HY-World 2.0 Get Started](../../README.md#-get-started).
 
 <details>
 <summary><b>Installation Notes</b></summary>
