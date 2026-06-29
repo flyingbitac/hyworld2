@@ -185,9 +185,9 @@ if __name__ == '__main__':
     parser.add_argument("--node_size", type=int, default=1, help="world size for multi-node")
 
     # VLM server params
-    parser.add_argument("--llm_addr", type=str, default=LLM_ADDR, help="vLLM server address")
-    parser.add_argument("--llm_port", type=int, default=LLM_PORT, help="vLLM server port")
-    parser.add_argument("--llm_name", type=str, default=MODEL_NAME, help="VLM model name served by vLLM")
+    parser.add_argument("--llm_addr", type=str, default=LLM_ADDR, help="OpenAI-compatible VLM server address")
+    parser.add_argument("--llm_port", type=int, default=LLM_PORT, help="OpenAI-compatible VLM server port")
+    parser.add_argument("--llm_name", type=str, default=MODEL_NAME, help="VLM model name served by the OpenAI-compatible server")
 
     args = parser.parse_args()
 

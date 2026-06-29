@@ -50,9 +50,9 @@ if __name__ == '__main__':
     parser.add_argument("--node_size", type=int, default=1, help="world size for multi-node")
 
     # VLM server params
-    parser.add_argument("--llm_addr", type=str, default=LLM_ADDR, help="vLLM server address")
-    parser.add_argument("--llm_port", type=int, default=LLM_PORT, help="vLLM server port")
-    parser.add_argument("--llm_name", type=str, default=MODEL_NAME, help="VLM model name served by vLLM")
+    parser.add_argument("--llm_addr", type=str, default=LLM_ADDR, help="OpenAI-compatible VLM server address")
+    parser.add_argument("--llm_port", type=int, default=LLM_PORT, help="OpenAI-compatible VLM server port")
+    parser.add_argument("--llm_name", type=str, default=MODEL_NAME, help="VLM model name served by the OpenAI-compatible server")
 
     args = parser.parse_args()
 
@@ -133,13 +133,13 @@ if __name__ == '__main__':
 
             dist.barrier()
 
-        # Caption rendered trajectories with concurrent vLLM requests.
+        # Caption rendered trajectories with concurrent OpenAI-compatible VLM requests.
         if rank == 0:
             total_render_list = glob(f"{scene_path}/render_results/*/traj*/render.mp4")
             total_render_list = [path for path in total_render_list if not (path.split("/")[-3].startswith("reconstruct_") and path.split("/")[-2] == "traj1")]
 
             if total_render_list:
-                with timer.track("vllm Qwen3-VL trajectory caption (parallel)"):
+                with timer.track("Qwen3-VL trajectory caption (parallel)"):
                     tasks = [(path, LLM_ADDR, LLM_PORT, MODEL_NAME) for path in total_render_list]
                     with ThreadPoolExecutor(max_workers=min(len(tasks), 32)) as executor:
                         futures = [executor.submit(caption_single_video, task) for task in tasks]

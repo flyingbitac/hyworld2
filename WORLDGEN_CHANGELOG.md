@@ -49,11 +49,14 @@
 | Stage5 | `world_gs_trainer.py` | `cfg.ssim_lambda <= 0` 时跳过 `fused_ssim` CUDA kernel | RTX 5090/sm_120 上 fused SSIM kernel 不兼容时仍可训练 | 不是主要显存优化；成功路径使用 `--ssim-lambda 0` |
 | Stage5 | `gsplat/cuda/_backend.py` | `shutil.rmtree(..., ignore_errors=True)` | 预编译 CUDA13 扩展导入失败后，多进程 JIT fallback 的清理 race 不再中断 | 不是显存优化 |
 | Stage1/2 | `traj_generate.py` | HF cache 跟随 `HF_HOME` / `HUGGINGFACE_HUB_CACHE`，SAM3 repo 可配置 | 支持容器默认模型挂载和本地 SAM3 | 不是显存优化 |
+| Stage1/2 | `traj_generate.py` / `traj_render.py` | CLI help 从 vLLM-specific 改为 OpenAI-compatible VLM server；Stage2 timer 文案同步改名 | 与 `scripts/launch_vlm.sh` 的 transformers/FastAPI shim 保持一致，避免保留过时 vLLM 入口语义 | 不是显存优化 |
 | Stage1/2 | `scripts/vlm_server.py` / `scripts/launch_vlm.sh` | 用 `hyworld2-pano` 环境中的 transformers + FastAPI 实现 OpenAI-compatible Qwen3-VL shim，并删除旧的 `scripts/launch_vllm.sh` | vLLM/FlashInfer 在 Blackwell 上不可用时，Stage1/2 VLM 仍可服务，且不再保留 vLLM/torch2.11/cu13 运行路径 | Stage2 caption profile 中 GPU1 峰值 `18395 MiB` |
 | Stage1/2 文档 | `hyworld2/worldgen/README.md` | 将 VLM 前置条件从必须 vLLM 改为 OpenAI-compatible server，并给出 `scripts/launch_vlm.sh` 示例 | 文档与 Dockerfile 内置 transformers shim 保持一致 | 不是显存优化 |
 | Pano | `panogen/pipeline_with_qwen_image.py` | 新增 `--load-strategy`：`cuda`、`balanced`、`cpu-offload`、`sequential-offload` | 允许全景生成在低显存设备上使用 diffusers offload | `balanced` profile 中 GPU0 峰值 `5489 MiB`，GPU1 峰值 `16453 MiB`；默认仍为 `cuda` |
 | Pano | `panogen/README.md` | PyTorch 安装说明从 CUDA 11.8 改为 CUDA 12.8 | 与 Dockerfile / Blackwell 环境一致 | 不是显存优化 |
 | 仓库卫生 | `.gitignore` / `.dockerignore` | 忽略模型、示例输出、checkpoint、视频等大文件 | 防止生成产物进入 git | 不是显存优化 |
+| 仓库卫生 | `scripts/profile_gpu.py` | SIGINT/SIGTERM 时转发终止给子进程并仍写 JSON summary，添加 `interrupted: true` | 长跑 profile 被人工停止时不再只留下 CSV；Stage3 full attempt 这类测量可复现记录峰值 | 不是显存优化 |
+| 仓库卫生 | `scripts/test_vlm.py` | 删除一次性手工 VLM 探测脚本 | 该脚本不属于 Docker verify 或 pipeline 入口，保留会增加维护噪音 | 不是显存优化 |
 
 ## 已知失败路径
 
