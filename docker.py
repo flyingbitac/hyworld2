@@ -214,6 +214,25 @@ def verify(args: argparse.Namespace) -> None:
             "print('hyworld2 ok', torch.__version__, 'cuda', torch.cuda.is_available(), torch.cuda.device_count(), diffusers.__version__, transformers.__version__)\"",
         ),
         (
+            "worldgen runtime defaults",
+            "/opt/miniconda3/bin/conda run -n hyworld2 python -c "
+            "\"import os; "
+            "expected={'HF_HOME':'/models/.cache/huggingface',"
+            "'HUGGINGFACE_HUB_CACHE':'/models/.cache/huggingface/hub',"
+            "'HF_ENDPOINT':'https://hf-mirror.com',"
+            "'SAM3_REPO_ID':'/models/sam3',"
+            "'WORLDSTEREO_REPO':'/models/WorldStereo',"
+            "'WORLDMIRROR_MODEL':'/models/HY-World-2.0',"
+            "'WS_TEXT_DTYPE':'bf16',"
+            "'WS_AUX_OFFLOAD':'1',"
+            "'WORLDMIRROR_NPROC_PER_NODE':'1',"
+            "'WORLDMIRROR_TARGET_SIZE':'512',"
+            "'WORLDMIRROR_CUDA_VISIBLE_DEVICES':'0'}; "
+            "bad={k:(os.environ.get(k),v) for k,v in expected.items() if os.environ.get(k)!=v}; "
+            "assert not bad, bad; "
+            "print('worldgen defaults ok', ' '.join(f'{k}={v}' for k,v in expected.items()))\"",
+        ),
+        (
             "PyTorch3D CUDA rasterizer",
             "cd /workspace/hyworld2 && "
             "/opt/miniconda3/bin/conda run -n hyworld2 python -c "
