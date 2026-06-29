@@ -15,8 +15,8 @@ cd HY-World-2.0
 conda create -n hyworld2-pano python=3.10
 conda activate hyworld2-pano
 
-# 3. Install PyTorch (CUDA 11.8)
-pip install torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu118
+# 3. Install PyTorch (CUDA 12.8)
+pip install torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu128
 
 # 4. Install dependencies
 pip install -r requirements.txt

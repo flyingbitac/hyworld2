@@ -121,6 +121,7 @@ class HunyuanPanoPipeline:
         lora_path: str = DEFAULT_LORA_PATH,
         lora_subfolder: str = DEFAULT_LORA_SUBFOLDER,
         torch_dtype: torch.dtype = torch.bfloat16,
+        load_strategy: str = "cuda",
     ) -> "HunyuanPanoPipeline":
         """Load model weights (and LoRA) and return a ready-to-use pipeline.
 
@@ -137,12 +138,33 @@ class HunyuanPanoPipeline:
                 that contains the LoRA weights file.  Ignored when
                 ``lora_path`` is ``None``.
             torch_dtype: Torch dtype for the model. Defaults to bfloat16.
+            load_strategy: Device placement strategy. ``cuda`` keeps the
+                original single-GPU behavior, ``balanced`` lets diffusers split
+                modules across visible GPUs, ``cpu-offload`` enables accelerate
+                model CPU offload, and ``sequential-offload`` uses the most
+                conservative CPU offload path for lower VRAM machines.
         """
+        if load_strategy not in {"cuda", "balanced", "cpu-offload", "sequential-offload"}:
+            raise ValueError(f"Unsupported load_strategy: {load_strategy!r}")
+
         print(f"[Init] Loading base model from {pretrained_model_name_or_path} ...")
-        pipe = PanoDiffusionPipeline.from_pretrained(
-            pretrained_model_name_or_path,
-            torch_dtype=torch_dtype,
-        ).to("cuda")
+        if load_strategy == "balanced":
+            pipe = PanoDiffusionPipeline.from_pretrained(
+                pretrained_model_name_or_path,
+                torch_dtype=torch_dtype,
+                device_map="balanced",
+            )
+        else:
+            pipe = PanoDiffusionPipeline.from_pretrained(
+                pretrained_model_name_or_path,
+                torch_dtype=torch_dtype,
+            )
+            if load_strategy == "sequential-offload":
+                pipe.enable_sequential_cpu_offload()
+            elif load_strategy == "cpu-offload":
+                pipe.enable_model_cpu_offload()
+            else:
+                pipe = pipe.to("cuda")
         print("[Init] Base model loaded successfully!")
 
         if lora_path is not None:
@@ -278,6 +300,9 @@ def parse_args():
     parser.add_argument("--lora-subfolder", type=str,
                         default=HunyuanPanoPipeline.DEFAULT_LORA_SUBFOLDER,
                         help="Subfolder inside --lora-path that contains the LoRA weights file.")
+    parser.add_argument("--load-strategy", type=str, choices=["cuda", "balanced", "cpu-offload", "sequential-offload"],
+                        default="cuda",
+                        help="Model placement strategy. Use sequential-offload on lower-VRAM GPUs.")
 
     # ---- main-only ----
     parser.add_argument("--save", type=str, default=None,
@@ -299,6 +324,7 @@ def main(args):
         args.pretrained_model_name_or_path,
         lora_path=args.lora_path if args.lora_path else None,
         lora_subfolder=args.lora_subfolder,
+        load_strategy=args.load_strategy,
     )
 
     # Run inference
