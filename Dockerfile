@@ -82,7 +82,8 @@ RUN set -euo pipefail \
         "${CONDA_DIR}/bin/conda" run -n hyworld2 python -m pip install flash-attn --no-build-isolation; \
     fi \
     && if [[ "${INSTALL_WORLDGEN_EXTRAS}" == "1" ]]; then \
-        "${CONDA_DIR}/bin/conda" run -n hyworld2 python -m pip install --no-build-isolation -r requirements_git.txt; \
+        FORCE_CUDA=1 MAX_JOBS=4 CMAKE_BUILD_PARALLEL_LEVEL=4 \
+            "${CONDA_DIR}/bin/conda" run -n hyworld2 python -m pip install --no-build-isolation -r requirements_git.txt; \
         cd hyworld2/worldgen/third_party/navmesh; \
         RECAST_PATH="${HYWORLD_ROOT}/hyworld2/worldgen/third_party/recastnavigation" \
             "${CONDA_DIR}/bin/conda" run -n hyworld2 python -m pip install . --no-build-isolation; \

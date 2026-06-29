@@ -7,24 +7,27 @@
 - 已跑通的有效路径：Stage3 使用 2 卡 WorldStereo + 单进程 WorldMirror，Stage4 使用 2 卡，Stage5 使用单卡 3DGS 并设置 `--ssim-lambda 0`。
 - `show_gs` 已能加载 `/workspace/hyworld2/examples/worldgen/case000/gs_results_single/ckpts/ckpt_3999_rank0.pt`。
 - Stage5 验证指标：PSNR `25.74`，SSIM `0.748`，LPIPS `0.302`，Gaussians `612349`。
+- Stage1 skip-existing 已完成阶段级 GPU profile：单卡，使用 PyTorch3D CUDA rasterizer，GPU0 峰值 `9801 MiB` / 平均利用率 `11.85%`，GPU1 空闲。
 - Stage3 resume/load 已完成阶段级 GPU profile：2 卡，`video_gen.py --fsdp --skip_exist` 加载 WorldStereo/FSDP 后发现 33 个已有 render 和 `aligned_pcd.ply`，跳过重算；GPU0/GPU1 峰值均为 `23621 MiB`。
 - Stage3 WorldMirror fallback 已完成组件级 GPU profile：单卡，291 张图，target size `512`，GPU0 峰值 `14081 MiB` / 平均利用率 `35.11%`，GPU1 空闲。
 - Stage4 已完成阶段级 GPU profile：2 卡，GPU0 峰值 `4958 MiB` / 平均利用率 `27.57%`，GPU1 峰值 `3827 MiB` / 平均利用率 `32.82%`。
 - Stage5 已完成阶段级 GPU profile：单卡，GPU0 峰值 `3366 MiB` / 平均利用率 `46.89%`，GPU1 空闲。
 - Viewer 已完成常驻 GPU profile：单卡，GPU0 峰值 `1274 MiB` / 平均利用率 `0.27%`，GPU1 空闲。
-- 仍需补充：从文本到最终 3DGS 的完整 GPU 峰值采样。当前已有 Stage3 resume/load、Stage4、Stage5、viewer 实测，组件级/阶段日志级和失败路径证据。
+- 仍需补充：从文本到最终 3DGS 的完整 GPU 峰值采样。当前已有 Stage1 skip-existing、Stage3 resume/load、Stage4、Stage5、viewer 实测，组件级/阶段日志级和失败路径证据。
 
 ## 变更清单
 
 | 类别 | 文件 / 参数 | 修改 | 目的 | 显存影响 |
 | --- | --- | --- | --- | --- |
 | 容器 | `Dockerfile` | 新增 CUDA 12.8、conda 环境、worldgen 依赖、`requirements_git.txt` 源码安装 pytorch3d、rtree，并复用 `hyworld2-pano` 运行 VLM shim | 让镜像构建后具备 Stage1-Stage5 所需依赖 | 不是显存优化 |
+| 容器 | `Dockerfile` | 安装 `requirements_git.txt` 时设置 `FORCE_CUDA=1 MAX_JOBS=4 CMAKE_BUILD_PARALLEL_LEVEL=4` | 确保 PyTorch3D 编译 CUDA rasterizer，避免 Stage1/2 点云渲染报 `Not compiled with GPU support`；限制编译并发避免 CPU 全满 | 不是显存优化；保证使用 GPU rasterization |
 | 容器 | `Dockerfile` | 安装 `libglm-dev` | gsplat CUDA 扩展需要 `<glm/...>` 头文件；用系统包替代未跟踪的 30MB `csrc/third_party/glm` clone | 不是显存优化 |
 | 容器 | `Dockerfile` | 默认 `HF_HOME=/models/.cache/huggingface`、`HUGGINGFACE_HUB_CACHE=/models/.cache/huggingface/hub` | 使用只读模型挂载中的预下载权重，避免运行时下载 | 不是显存优化 |
 | 容器 | `Dockerfile` | 默认 `SAM3_REPO_ID=/models/sam3`、`WORLDSTEREO_REPO=/models/WorldStereo`、`WORLDMIRROR_MODEL=/models/HY-World-2.0`、`CAMERA_SELECTOR_MODEL=facebook/dinov2-base` | 消除运行 Stage1/3 时必须手动指定本地模型路径的问题 | 不是显存优化 |
 | 容器 | `Dockerfile` | 默认 `WS_TEXT_DTYPE=bf16`、`WS_AUX_OFFLOAD=1`、`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` | 将低显存 WorldStereo 路径固化为容器默认 | UMT5 注释记录约 `25 -> 12.5 GiB/card`；MoGe/SAM3 offload 日志中 WorldStereo 前常驻约 `21.3 GiB/card` |
 | 容器 | `Dockerfile` | 默认 `WORLDMIRROR_NPROC_PER_NODE=1`、`WORLDMIRROR_TARGET_SIZE=512`、`WORLDMIRROR_CUDA_VISIBLE_DEVICES=0` | 避开 2 卡 FSDP WorldMirror 在 291 张图、832 target size 上的 NCCL/CUDA illegal memory access | 失败路径 OOM/illegal memory；单卡 512 profile 峰值 `14081 MiB` |
 | 容器启动 | `docker.py` | 不再把 `HF_HOME` / hub cache 覆盖到 `/cache/huggingface` | 保持 Dockerfile 的 `/models/.cache/huggingface` 默认，否则 Wan/MoGe/SAM3/WorldStereo 解析会失败 | 不是显存优化 |
+| 容器启动 | `docker.py verify` | 新增 PyTorch3D CUDA rasterizer runtime check | import check 无法发现 CPU-only PyTorch3D；该检查直接调用 `PointsRasterizer(...)(Pointclouds(...))` | 不是显存优化 |
 | 离线模型 | `worldstereo_wrapper.py` | `_resolve_local_snapshot()` 将 Wan base model repo id 解析到本地 HF snapshot | 避免离线/镜像环境下 diffusers 尝试访问 Hugging Face | 不是显存优化 |
 | WorldStereo | `worldstereo_wrapper.py` | `WS_TEXT_DTYPE=bf16` 控制 UMT5/CLIP 加载 dtype | 降低文本和图像编码器权重占用 | 组件估算：UMT5 约节省 `12.5 GiB/card`，CLIP 约减半；需保留全流程实测 |
 | WorldStereo | `worldstereo_wrapper.py` | FSDP aux encoder 使用 bf16 mixed precision，且 `WS_AUX_OFFLOAD=1` 时启用 `CPUOffloadPolicy()` | 避免 FSDP forward 中 fp32 compute copy 翻倍占用；编码器不在 denoise loop 常驻 GPU | 注释记录 text+image encoder offload 可释放约 `6 GiB/card` |
@@ -58,7 +61,7 @@
 完整测量应覆盖：
 
 1. Panogen：文本到 panorama。
-2. Stage1：`traj_generate.py` + VLM shim，记录 VLM GPU 与主进程 GPU。
+2. Stage1：补充真实 VLM 调用 profile；当前已采样 `traj_generate.py --skip_exist` 的本地模型初始化、SAM3、navmesh 和 GPU point rasterization 路径，未覆盖 Qwen3-VL shim 请求。
 3. Stage2：`traj_render.py` 多卡渲染。
 4. Stage3：补充完整重算 profile；当前已采样 `video_gen.py --fsdp --skip_exist` 的 WorldStereo/FSDP load + resume skip 路径，以及 standalone WorldMirror fallback，尚未覆盖实际 video denoise 和 alignment 的完整峰值。
 5. Stage4：`gen_gs_data.py --save_normal --split_sky`。
@@ -71,6 +74,8 @@
 
 | 阶段 | 命令摘要 | GPU | 峰值显存 | 平均 GPU 利用率 | 证据 |
 | --- | --- | --- | --- | --- | --- |
+| Stage1 skip-existing | `python traj_generate.py --target_path case000 --apply_nav_traj --apply_up_route --apply_recon_iteration --skip_exist` | 0 | `9801 MiB` | `11.85%` | `examples/worldgen/case000/gpu_profile_stage1_skip.json` |
+| Stage1 skip-existing | 同上 | 1 | `3 MiB` | `0.00%` | `examples/worldgen/case000/gpu_profile_stage1_skip.json` |
 | Stage3 resume/load | `torchrun --nproc_per_node=2 video_gen.py --target_path case000 --fsdp --skip_exist --local_files_only` | 0 | `23621 MiB` | `0.42%` | `examples/worldgen/case000/gpu_profile_stage3_skip_load.json` |
 | Stage3 resume/load | 同上 | 1 | `23621 MiB` | `1.31%` | `examples/worldgen/case000/gpu_profile_stage3_skip_load.json` |
 | Stage3 WorldMirror fallback | `python -m hyworld2.worldrecon.pipeline ... --target_size 512 --enable_bf16 --disable_heads normal points gs` | 0 | `14081 MiB` | `35.11%` | `examples/worldgen/case000/gpu_profile_worldmirror.json` |
@@ -101,3 +106,4 @@ Stage5 profile 输出质量指标：
 - 第四次重建成功：`docker build` 产出 `hyworld2-isaaclab:3.0.0-beta2`，build-time import checks 通过：`hyworld2` 环境可导入 `torch/diffusers/transformers/recast/gsplat/worldrecon.pipeline`，`hyworld2-pano` 环境可导入 `pipeline/pipeline_with_qwen_image`。
 - Fresh container 验证成功：`python docker.py stop && python docker.py start && python docker.py verify` 通过；容器内 `HF_HOME=/models/.cache/huggingface`、`HUGGINGFACE_HUB_CACHE=/models/.cache/huggingface/hub`、`SAM3_REPO_ID=/models/sam3`、`WORLDSTEREO_REPO=/models/WorldStereo`、`WORLDMIRROR_MODEL=/models/HY-World-2.0`、`WS_TEXT_DTYPE=bf16`、`WS_AUX_OFFLOAD=1`、`WORLDMIRROR_NPROC_PER_NODE=1`、`WORLDMIRROR_TARGET_SIZE=512` 均为默认值。
 - VLM shim 轻量验证成功：`hyworld2-pano` 环境可导入 `fastapi`、`uvicorn`、`AutoModelForImageTextToText`、`AutoProcessor`；未在验证中加载完整 Qwen3-VL 权重。
+- 后续发现当前镜像中的 PyTorch3D 为 CPU-only，Stage1 点云 rasterizer 报 `RuntimeError: Not compiled with GPU support`。已在当前运行容器内用 `FORCE_CUDA=1 MAX_JOBS=4 CMAKE_BUILD_PARALLEL_LEVEL=4` 重装 PyTorch3D 并通过 `python docker.py verify` 的 CUDA rasterizer check；Dockerfile 已同步同样构建参数，但该 Dockerfile 修改后的完整镜像重建仍需补跑。

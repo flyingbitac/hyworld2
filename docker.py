@@ -214,6 +214,21 @@ def verify(args: argparse.Namespace) -> None:
             "print('hyworld2 ok', torch.__version__, 'cuda', torch.cuda.is_available(), torch.cuda.device_count(), diffusers.__version__, transformers.__version__)\"",
         ),
         (
+            "PyTorch3D CUDA rasterizer",
+            "cd /workspace/hyworld2 && "
+            "/opt/miniconda3/bin/conda run -n hyworld2 python -c "
+            "\"import torch; "
+            "from pytorch3d.renderer import PerspectiveCameras, PointsRasterizationSettings, PointsRasterizer; "
+            "from pytorch3d.structures import Pointclouds; "
+            "points=torch.tensor([[0.0,0.0,2.0],[0.1,0.0,2.0]], device='cuda'); "
+            "cloud=Pointclouds(points=[points]); "
+            "cameras=PerspectiveCameras(device='cuda'); "
+            "settings=PointsRasterizationSettings(image_size=4, radius=0.1, points_per_pixel=2); "
+            "fragments=PointsRasterizer(cameras=cameras, raster_settings=settings)(cloud); "
+            "torch.cuda.synchronize(); "
+            "print('pytorch3d cuda rasterizer ok', tuple(fragments.idx.shape))\"",
+        ),
+        (
             "hyworld2-pano env",
             "cd /workspace/hyworld2/hyworld2/panogen && "
             "/opt/miniconda3/bin/conda run -n hyworld2-pano python -c "
