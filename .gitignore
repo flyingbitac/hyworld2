@@ -10,3 +10,14 @@ skyseg.onnx
 *.ckpt
 CLAUDE.md
 commands.sh
+**/*.egg-info/
+examples/**/camera_trajectory/
+examples/**/gpu_profile_*.csv
+examples/**/gpu_profile_*.json
+examples/**/gs_data/
+examples/**/gs_results*/
+examples/**/meta_info.json
+examples/**/navmesh/
+examples/**/objects.json
+examples/**/render_results/
+/models/
