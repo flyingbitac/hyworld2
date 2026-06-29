@@ -9,8 +9,10 @@
 - Stage5 验证指标：PSNR `25.74`，SSIM `0.748`，LPIPS `0.302`，Gaussians `612349`。
 - Panogen Qwen-Image-Edit 已完成阶段级 GPU profile：fresh container 中使用 `--load-strategy balanced`，GPU0 峰值 `5489 MiB` / 平均利用率 `35.13%`，GPU1 峰值 `16453 MiB` / 平均利用率 `0.37%`。
 - Stage1 skip-existing 已完成阶段级 GPU profile：单卡，使用 Dockerfile 构建出的 fresh container 和 PyTorch3D CUDA rasterizer，GPU0 峰值 `9801 MiB` / 平均利用率 `13.28%`，GPU1 空闲。
+- Stage1 true-VLM 已完成阶段级 GPU profile：fresh container 中临时 scene 从 `panorama.png` 重新生成 trajectory，GPU0 跑 `traj_generate.py`，GPU1 跑 Qwen3-VL shim；GPU0 峰值 `11213 MiB` / 平均利用率 `8.15%`，GPU1 峰值 `17995 MiB` / 平均利用率 `2.20%`。
 - Stage2 已完成阶段级 GPU profile：fresh container 中 GPU0 单进程点云渲染 + GPU1 Qwen3-VL shim caption，GPU0 峰值 `3895 MiB` / 平均利用率 `45.85%`，GPU1 峰值 `18395 MiB` / 平均利用率 `40.55%`。
 - Stage3 resume/load 已完成阶段级 GPU profile：2 卡，`video_gen.py --fsdp --skip_exist` 加载 WorldStereo/FSDP 后发现 33 个已有 render 和 `aligned_pcd.ply`，跳过重算；GPU0/GPU1 峰值均为 `23621 MiB`。
+- Stage3 full attempt 已完成长跑 GPU profile：fresh container 中复制 case000 到 `/tmp/hyworld_stage3_full` 后运行 `video_gen.py --fsdp` 不带 `--skip_exist`，33 个 WorldStereo 视频、291 个 WorldMirror depth、`aligned_pcd.ply` 和 `global_pcd.ply` 均已产出；命令在长尾阶段运行 `2788.561s` 后由人工 SIGTERM，GPU0 峰值 `32069 MiB` / 平均利用率 `73.32%`，GPU1 峰值 `32107 MiB` / 平均利用率 `74.31%`。
 - Stage3 WorldMirror fallback 已完成组件级 GPU profile：单卡，291 张图，target size `512`，GPU0 峰值 `14081 MiB` / 平均利用率 `35.11%`，GPU1 空闲。
 - Stage4 已完成阶段级 GPU profile：2 卡，GPU0 峰值 `4958 MiB` / 平均利用率 `27.57%`，GPU1 峰值 `3827 MiB` / 平均利用率 `32.82%`。
 - Stage5 已完成阶段级 GPU profile：单卡，GPU0 峰值 `3366 MiB` / 平均利用率 `46.89%`，GPU1 空闲。
@@ -65,9 +67,9 @@
 完整测量应覆盖：
 
 1. Panogen：已采样 Qwen-Image-Edit backend，`--load-strategy balanced`，40 steps，模型从 `/models` 本地挂载读取。
-2. Stage1：补充真实 VLM 调用 profile；当前已采样 `traj_generate.py --skip_exist` 的本地模型初始化、SAM3、navmesh 和 GPU point rasterization 路径，未覆盖 Qwen3-VL shim 请求。
+2. Stage1：已采样 `traj_generate.py --force_vlm` 的真实 Qwen3-VL shim 请求、SAM3、navmesh、up-route 和 recon-iteration 路径；另保留 `--skip_exist` 对 case000 现有输出的 Dockerfile fresh-container 验证。
 3. Stage2：已采样 `traj_render.py` 单进程 GPU0 渲染 + GPU1 Qwen3-VL shim caption；还未采样多卡渲染配置。
-4. Stage3：补充完整重算 profile；当前已采样 `video_gen.py --fsdp --skip_exist` 的 WorldStereo/FSDP load + resume skip 路径，以及 standalone WorldMirror fallback，尚未覆盖实际 video denoise 和 alignment 的完整峰值。
+4. Stage3：已采样 full attempt 的实际 WorldStereo video denoise、WorldMirror depth 和 alignment/global-pcd 输出峰值；但命令未自然退出，记录为 `returncode 143` interrupted attempt。另保留 `--skip_exist` load/resume 和 standalone WorldMirror fallback profile。
 5. Stage4：`gen_gs_data.py --save_normal --split_sky`。
 6. Stage5：单卡 `world_gs_trainer ... --ssim-lambda 0`。
 7. Viewer：`show_gs.py` 常驻显存。
@@ -82,10 +84,14 @@
 | Panogen Qwen-Image-Edit | 同上；GPU1 hosts balanced-loaded model weights | 1 | `16453 MiB` | `0.37%` | `examples/worldgen/case000/gpu_profile_panogen_qwen_balanced.json` |
 | Stage1 skip-existing | `python traj_generate.py --target_path case000 --apply_nav_traj --apply_up_route --apply_recon_iteration --skip_exist` | 0 | `9801 MiB` | `13.28%` | `examples/worldgen/case000/gpu_profile_stage1_skip.json` |
 | Stage1 skip-existing | 同上 | 1 | `3 MiB` | `0.00%` | `examples/worldgen/case000/gpu_profile_stage1_skip.json` |
+| Stage1 true-VLM | `CUDA_VISIBLE_DEVICES=0 python traj_generate.py --target_path /tmp/hyworld_stage1_vlm --apply_nav_traj --apply_up_route --apply_recon_iteration --force_vlm --llm_addr localhost --llm_port 8000 --llm_name Qwen/Qwen3-VL-8B-Instruct` with Qwen3-VL shim on GPU1 | 0 | `11213 MiB` | `8.15%` | `examples/worldgen/case000/gpu_profile_stage1_vlm.json` |
+| Stage1 true-VLM | 同上；GPU1 runs `scripts/launch_vlm.sh` / `scripts/vlm_server.py` | 1 | `17995 MiB` | `2.20%` | `examples/worldgen/case000/gpu_profile_stage1_vlm.json` |
 | Stage2 render+caption | `CUDA_VISIBLE_DEVICES=0 torchrun --nproc_per_node=1 traj_render.py --target_path case000 --llm_addr localhost --llm_port 8000 --llm_name Qwen/Qwen3-VL-8B-Instruct` with Qwen3-VL shim on GPU1 | 0 | `3895 MiB` | `45.85%` | `examples/worldgen/case000/gpu_profile_stage2.json` |
 | Stage2 render+caption | 同上；GPU1 runs `scripts/launch_vlm.sh` / `scripts/vlm_server.py` | 1 | `18395 MiB` | `40.55%` | `examples/worldgen/case000/gpu_profile_stage2.json` |
 | Stage3 resume/load | `torchrun --nproc_per_node=2 video_gen.py --target_path case000 --fsdp --skip_exist --local_files_only` | 0 | `23621 MiB` | `0.42%` | `examples/worldgen/case000/gpu_profile_stage3_skip_load.json` |
 | Stage3 resume/load | 同上 | 1 | `23621 MiB` | `1.31%` | `examples/worldgen/case000/gpu_profile_stage3_skip_load.json` |
+| Stage3 full attempt | `torchrun --nproc_per_node=2 video_gen.py --target_path /tmp/hyworld_stage3_full --fsdp --local_files_only` | 0 | `32069 MiB` | `73.32%` | `examples/worldgen/case000/gpu_profile_stage3_full.json` |
+| Stage3 full attempt | 同上；interrupted after 33 WorldStereo videos, 291 WorldMirror depth files, `aligned_pcd.ply`, and `global_pcd.ply` were observed | 1 | `32107 MiB` | `74.31%` | `examples/worldgen/case000/gpu_profile_stage3_full.json` |
 | Stage3 WorldMirror fallback | `python -m hyworld2.worldrecon.pipeline ... --target_size 512 --enable_bf16 --disable_heads normal points gs` | 0 | `14081 MiB` | `35.11%` | `examples/worldgen/case000/gpu_profile_worldmirror.json` |
 | Stage3 WorldMirror fallback | 同上 | 1 | `3 MiB` | `0.00%` | `examples/worldgen/case000/gpu_profile_worldmirror.json` |
 | Stage4 | `torchrun --nproc_per_node=2 gen_gs_data.py --root_path case000 --save_normal --split_sky` | 0 | `4958 MiB` | `27.57%` | `examples/worldgen/case000/gpu_profile_stage4.json` |
@@ -118,4 +124,6 @@ Stage5 profile 输出质量指标：
 - Fresh container GPU rasterizer 验证成功：`python docker.py stop && python docker.py start && python docker.py verify` 通过，`PyTorch3D CUDA rasterizer` runtime check 输出 `pytorch3d cuda rasterizer ok (1, 4, 4, 2)`。
 - Fresh container Panogen profile 验证成功：`pipeline_with_qwen_image.py` 使用 `/models/Qwen/Qwen-Image-Edit-2509` 和 `/models/HY-World-2.0/HY-Pano-2.0`，`--load-strategy balanced`，40 steps 返回码 `0`，输出 `1920 x 960` PNG。总耗时 `718.449s`；GPU0 峰值 `5489 MiB`、平均利用率 `35.13%`，GPU1 峰值 `16453 MiB`、平均利用率 `0.37%`。日志出现 diffusers 后处理 `invalid value encountered in cast` warning，输出文件仅作为 profile 验证产物未纳入 git。
 - Fresh container Stage1 profile 验证成功：用刚构建的镜像启动的容器运行 `traj_generate.py --apply_nav_traj --apply_up_route --apply_recon_iteration --skip_exist`，返回码 `0`；GPU0 峰值 `9801 MiB`、平均利用率 `13.28%`，GPU1 峰值 `3 MiB`、平均利用率 `0.00%`。
+- Fresh container Stage1 true-VLM profile 验证成功：在容器 `/tmp/hyworld_stage1_vlm` 复制 case000 `panorama.png` 后启动 `scripts/launch_vlm.sh`，运行 `traj_generate.py --apply_nav_traj --apply_up_route --apply_recon_iteration --force_vlm`，返回码 `0`；完成 meta information VLM labeling、objects VLM labeling、SAM3 segmentation、navmesh path planning、aerial route 和 recon eloop。总耗时 `88.747s`；GPU0 峰值 `11213 MiB`、平均利用率 `8.15%`，GPU1 峰值 `17995 MiB`、平均利用率 `2.20%`。临时 scene 约 `958MB`，已从容器 `/tmp` 删除。
 - Fresh container Stage2 profile 验证成功：启动 `scripts/launch_vlm.sh` 后运行 `traj_render.py`，返回码 `0`；33 条轨迹完成点云渲染，28 个 VLM caption 请求完成。GPU0 峰值 `3895 MiB`、平均利用率 `45.85%`；GPU1 峰值 `18395 MiB`、平均利用率 `40.55%`。
+- Fresh container Stage3 full attempt 验证记录：在容器 `/tmp/hyworld_stage3_full` 复制 case000 后运行 `video_gen.py --fsdp --local_files_only` 不带 `--skip_exist`。采样 `2788.561s` 后人工 SIGTERM，profile summary 标记 `interrupted: true` / `returncode: 143`；停止前已观察到 33 个 `worldstereo-memory-dmd_result.mp4`、291 个 WorldMirror `depth_*.npy`、`aligned_pcd.ply` 和 `global_pcd.ply`。GPU0 峰值 `32069 MiB`、平均利用率 `73.32%`；GPU1 峰值 `32107 MiB`、平均利用率 `74.31%`。临时副本约 `2.4GB`，已从容器 `/tmp` 删除。
