@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import signal
 import subprocess
 import sys
@@ -87,7 +88,7 @@ def main() -> int:
     args.summary.parent.mkdir(parents=True, exist_ok=True)
 
     start = time.time()
-    process = subprocess.Popen(args.command)
+    process = subprocess.Popen(args.command, start_new_session=True)
     max_mem: dict[int, int] = {}
     util_sum: dict[int, int] = {}
     util_count: dict[int, int] = {}
@@ -99,7 +100,7 @@ def main() -> int:
         interrupted = True
         forwarded_signal = signum
         if process.poll() is None:
-            process.terminate()
+            os.killpg(process.pid, signum)
 
     old_sigint = signal.signal(signal.SIGINT, _handle_signal)
     old_sigterm = signal.signal(signal.SIGTERM, _handle_signal)
@@ -133,7 +134,7 @@ def main() -> int:
         signal.signal(signal.SIGINT, old_sigint)
         signal.signal(signal.SIGTERM, old_sigterm)
         if interrupted and process.poll() is None:
-            process.kill()
+            os.killpg(process.pid, signal.SIGKILL)
 
     returncode = process.wait()
     elapsed = time.time() - start

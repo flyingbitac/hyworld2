@@ -55,7 +55,7 @@
 | Pano | `panogen/pipeline_with_qwen_image.py` | 新增 `--load-strategy`：`cuda`、`balanced`、`cpu-offload`、`sequential-offload` | 允许全景生成在低显存设备上使用 diffusers offload | `balanced` profile 中 GPU0 峰值 `5489 MiB`，GPU1 峰值 `16453 MiB`；默认仍为 `cuda` |
 | Pano | `panogen/README.md` | PyTorch 安装说明从 CUDA 11.8 改为 CUDA 12.8 | 与 Dockerfile / Blackwell 环境一致 | 不是显存优化 |
 | 仓库卫生 | `.gitignore` / `.dockerignore` | 忽略模型、示例输出、checkpoint、视频等大文件 | 防止生成产物进入 git | 不是显存优化 |
-| 仓库卫生 | `scripts/profile_gpu.py` | SIGINT/SIGTERM 时转发终止给子进程并仍写 JSON summary，添加 `interrupted: true` | 长跑 profile 被人工停止时不再只留下 CSV；Stage3 full attempt 这类测量可复现记录峰值 | 不是显存优化 |
+| 仓库卫生 | `scripts/profile_gpu.py` | SIGINT/SIGTERM 时转发终止给被测命令的整个进程组并仍写 JSON summary，添加 `interrupted: true` | 长跑 profile 被人工停止时不再只留下 CSV，也不残留 torchrun worker；Stage3 full attempt 这类测量可复现记录峰值 | 不是显存优化 |
 | 仓库卫生 | `scripts/test_vlm.py` | 删除一次性手工 VLM 探测脚本 | 该脚本不属于 Docker verify 或 pipeline 入口，保留会增加维护噪音 | 不是显存优化 |
 
 ## 已知失败路径
