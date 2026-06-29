@@ -26,6 +26,29 @@ def broadcast(input_: torch.Tensor, group: dist.ProcessGroup):
     dist.broadcast(input_, src=src, group=group)
 
 
+def _all_to_all_single_via_gather(input_t: torch.Tensor, group: dist.ProcessGroup) -> torch.Tensor:
+    """Drop-in for ``dist.all_to_all_single`` (split/concat along dim 0) on setups
+    where the NCCL kernel is broken — e.g. Blackwell sm_120 + torch 2.7 raises an
+    illegal-memory-access. Identical semantics: rank r receives, in ``output[i]``,
+    the i-th chunk (dim 0) of rank i's input. Built on ``all_gather`` (which works).
+    """
+    ws = dist.get_world_size(group)
+    if ws == 1:
+        return input_t
+    me = dist.get_group_rank(group, dist.get_rank())
+    inp = input_t.contiguous()
+    parts = [torch.empty_like(inp) for _ in range(ws)]
+    dist.all_gather(parts, inp, group=group)
+    # output[i] = parts[i][me] (the me-th chunk along dim 0 of rank i's input).
+    # Build it directly and drop each part as we go so the peak stays at ~ws*input
+    # rather than 2*ws*input (a torch.stack would double it).
+    output = torch.empty((ws,) + tuple(inp.shape[1:]), device=inp.device, dtype=inp.dtype)
+    for i in range(ws):
+        output[i].copy_(parts[i][me])
+        parts[i] = None
+    return output
+
+
 def _all_to_all_4D(
     input: torch.tensor, scatter_idx: int = 2, gather_idx: int = 1, group=None
 ) -> torch.tensor:
@@ -76,11 +99,9 @@ def _all_to_all_4D(
             .contiguous()
         )
 
-        output = torch.empty_like(input_t)
-        # https://pytorch.org/docs/stable/distributed.html#torch.distributed.all_to_all_single
         # (P, seq_len/P, bs, hc/P, hs) scatter seqlen -all2all-> (P, seq_len/P, bs, hc/P, hs) scatter head
         if seq_world_size > 1:
-            dist.all_to_all_single(output, input_t, group=group)
+            output = _all_to_all_single_via_gather(input_t, group)
         else:
             output = input_t
         # if scattering the seq-dim, transpose the heads back to the original dimension
@@ -122,11 +143,9 @@ def _all_to_all_4D(
             .reshape(seq_world_size, shard_hc, shard_seqlen, bs, hs)
         )
 
-        output = torch.empty_like(input_t)
-        # https://pytorch.org/docs/stable/distributed.html#torch.distributed.all_to_all_single
         # (P, bs x hc/P, seqlen/P, hs) scatter seqlen -all2all-> (P, bs x seq_len/P, hc/P, hs) scatter head
         if seq_world_size > 1:
-            dist.all_to_all_single(output, input_t, group=group)
+            output = _all_to_all_single_via_gather(input_t, group)
         else:
             output = input_t
 

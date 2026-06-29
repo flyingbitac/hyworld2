@@ -429,8 +429,20 @@ def compute_sky_mask(img_paths, H, W, S, predictions=None, source="auto",
             "https://huggingface.co/JianyuanWang/skyseg/resolve/main/skyseg.onnx",
             skyseg_path,
         )
-    import onnxruntime
-    session = onnxruntime.InferenceSession(skyseg_path)
+    if not os.path.exists(skyseg_path):
+        if source == "auto":
+            mask = _compute_sky_mask_from_model(predictions, H, W, S, model_threshold) if predictions else None
+            return mask if mask is not None else np.ones((S, H, W), dtype=bool)
+        raise FileNotFoundError(f"Sky segmentation ONNX model not found: {skyseg_path}")
+
+    try:
+        import onnxruntime
+        session = onnxruntime.InferenceSession(skyseg_path)
+    except Exception:
+        if source == "auto":
+            mask = _compute_sky_mask_from_model(predictions, H, W, S, model_threshold) if predictions else None
+            return mask if mask is not None else np.ones((S, H, W), dtype=bool)
+        raise
     sky_list = []
     for i in range(S):
         if processed_aspect_ratio is not None:

@@ -1153,9 +1153,12 @@ class Runner:
 
             # loss
             l1loss = F.l1_loss(colors, pixels)
-            ssimloss = 1.0 - fused_ssim(
-                colors.permute(0, 3, 1, 2), pixels.permute(0, 3, 1, 2), padding="valid"
-            )
+            if cfg.ssim_lambda > 0:
+                ssimloss = 1.0 - fused_ssim(
+                    colors.permute(0, 3, 1, 2), pixels.permute(0, 3, 1, 2), padding="valid"
+                )
+            else:
+                ssimloss = torch.zeros((), device=device, dtype=l1loss.dtype)
             loss = l1loss * (1.0 - cfg.ssim_lambda) + ssimloss * cfg.ssim_lambda
 
             if cfg.lpips_lambda1 > 0:
@@ -2336,9 +2339,12 @@ class Runner:
 
             # Loss
             l1loss = F.l1_loss(colors, pixels)
-            ssimloss = 1.0 - fused_ssim(
-                colors.permute(0, 3, 1, 2), pixels.permute(0, 3, 1, 2), padding="valid"
-            )
+            if cfg.ssim_lambda > 0:
+                ssimloss = 1.0 - fused_ssim(
+                    colors.permute(0, 3, 1, 2), pixels.permute(0, 3, 1, 2), padding="valid"
+                )
+            else:
+                ssimloss = torch.zeros((), device=device, dtype=l1loss.dtype)
             loss = l1loss * (1.0 - cfg.ssim_lambda) + ssimloss * cfg.ssim_lambda
 
             # Mask sparsity loss: use the same sampled mask_gate
@@ -2484,9 +2490,12 @@ class Runner:
             colors = renders[..., 0:3]
 
             l1loss = F.l1_loss(colors, pixels)
-            ssimloss = 1.0 - fused_ssim(
-                colors.permute(0, 3, 1, 2), pixels.permute(0, 3, 1, 2), padding="valid"
-            )
+            if cfg.ssim_lambda > 0:
+                ssimloss = 1.0 - fused_ssim(
+                    colors.permute(0, 3, 1, 2), pixels.permute(0, 3, 1, 2), padding="valid"
+                )
+            else:
+                ssimloss = torch.zeros((), device=device, dtype=l1loss.dtype)
             loss = l1loss * (1.0 - cfg.ssim_lambda) + ssimloss * cfg.ssim_lambda
 
             # Continue mask loss during finetuning (use sampled gate)
