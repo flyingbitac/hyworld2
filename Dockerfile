@@ -7,6 +7,7 @@ ARG CONDA_DIR=/opt/miniconda3
 ARG CUDA_ARCH_LIST=12.0
 ARG INSTALL_FLASH_ATTN=1
 ARG INSTALL_WORLDGEN_EXTRAS=1
+ARG FLASH_ATTN_WHEEL_URL=https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.3.14/flash_attn-2.8.2+cu128torch2.7-cp311-cp311-linux_x86_64.whl
 
 USER root
 
@@ -18,6 +19,8 @@ ENV HUGGINGFACE_HUB_CACHE=/models/.cache/huggingface/hub
 ENV TORCH_HOME=/models/.cache/torch
 ENV PIP_NO_CACHE_DIR=1
 ENV PIP_ROOT_USER_ACTION=ignore
+ENV PIP_INDEX_URL=https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
+ENV PIP_TIMEOUT=120
 ENV CUDA_HOME=/usr/local/cuda-12.8
 ENV PATH=${CUDA_HOME}/bin:${PATH}
 ENV LD_LIBRARY_PATH=${CUDA_HOME}/lib64
@@ -79,7 +82,7 @@ RUN set -euo pipefail \
     && "${CONDA_DIR}/bin/conda" run -n hyworld2 python -m pip install -e . --no-build-isolation \
     && cd "${HYWORLD_ROOT}" \
     && if [[ "${INSTALL_FLASH_ATTN}" == "1" ]]; then \
-        "${CONDA_DIR}/bin/conda" run -n hyworld2 python -m pip install flash-attn --no-build-isolation; \
+        "${CONDA_DIR}/bin/conda" run -n hyworld2 python -m pip install "${FLASH_ATTN_WHEEL_URL}"; \
     fi \
     && if [[ "${INSTALL_WORLDGEN_EXTRAS}" == "1" ]]; then \
         FORCE_CUDA=1 MAX_JOBS=4 CMAKE_BUILD_PARALLEL_LEVEL=4 \
