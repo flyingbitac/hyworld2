@@ -7,10 +7,12 @@
 - 已跑通的有效路径：Stage3 使用 2 卡 WorldStereo + 单进程 WorldMirror，Stage4 使用 2 卡，Stage5 使用单卡 3DGS 并设置 `--ssim-lambda 0`。
 - `show_gs` 已能加载 `/workspace/hyworld2/examples/worldgen/case000/gs_results_single/ckpts/ckpt_3999_rank0.pt`。
 - Stage5 验证指标：PSNR `25.74`，SSIM `0.748`，LPIPS `0.302`，Gaussians `612349`。
+- Stage3 resume/load 已完成阶段级 GPU profile：2 卡，`video_gen.py --fsdp --skip_exist` 加载 WorldStereo/FSDP 后发现 33 个已有 render 和 `aligned_pcd.ply`，跳过重算；GPU0/GPU1 峰值均为 `23621 MiB`。
+- Stage3 WorldMirror fallback 已完成组件级 GPU profile：单卡，291 张图，target size `512`，GPU0 峰值 `14081 MiB` / 平均利用率 `35.11%`，GPU1 空闲。
 - Stage4 已完成阶段级 GPU profile：2 卡，GPU0 峰值 `4958 MiB` / 平均利用率 `27.57%`，GPU1 峰值 `3827 MiB` / 平均利用率 `32.82%`。
 - Stage5 已完成阶段级 GPU profile：单卡，GPU0 峰值 `3366 MiB` / 平均利用率 `46.89%`，GPU1 空闲。
 - Viewer 已完成常驻 GPU profile：单卡，GPU0 峰值 `1274 MiB` / 平均利用率 `0.27%`，GPU1 空闲。
-- 仍需补充：从文本到最终 3DGS 的完整 GPU 峰值采样。当前已有 Stage4、Stage5、viewer 实测，组件级/阶段日志级和失败路径证据。
+- 仍需补充：从文本到最终 3DGS 的完整 GPU 峰值采样。当前已有 Stage3 resume/load、Stage4、Stage5、viewer 实测，组件级/阶段日志级和失败路径证据。
 
 ## 变更清单
 
@@ -21,7 +23,7 @@
 | 容器 | `Dockerfile` | 默认 `HF_HOME=/models/.cache/huggingface`、`HUGGINGFACE_HUB_CACHE=/models/.cache/huggingface/hub` | 使用只读模型挂载中的预下载权重，避免运行时下载 | 不是显存优化 |
 | 容器 | `Dockerfile` | 默认 `SAM3_REPO_ID=/models/sam3`、`WORLDSTEREO_REPO=/models/WorldStereo`、`WORLDMIRROR_MODEL=/models/HY-World-2.0`、`CAMERA_SELECTOR_MODEL=facebook/dinov2-base` | 消除运行 Stage1/3 时必须手动指定本地模型路径的问题 | 不是显存优化 |
 | 容器 | `Dockerfile` | 默认 `WS_TEXT_DTYPE=bf16`、`WS_AUX_OFFLOAD=1`、`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` | 将低显存 WorldStereo 路径固化为容器默认 | UMT5 注释记录约 `25 -> 12.5 GiB/card`；MoGe/SAM3 offload 日志中 WorldStereo 前常驻约 `21.3 GiB/card` |
-| 容器 | `Dockerfile` | 默认 `WORLDMIRROR_NPROC_PER_NODE=1`、`WORLDMIRROR_TARGET_SIZE=512`、`WORLDMIRROR_CUDA_VISIBLE_DEVICES=0` | 避开 2 卡 FSDP WorldMirror 在 291 张图、832 target size 上的 NCCL/CUDA illegal memory access | 失败路径 OOM/illegal memory；单卡 512 成功，峰值待采样 |
+| 容器 | `Dockerfile` | 默认 `WORLDMIRROR_NPROC_PER_NODE=1`、`WORLDMIRROR_TARGET_SIZE=512`、`WORLDMIRROR_CUDA_VISIBLE_DEVICES=0` | 避开 2 卡 FSDP WorldMirror 在 291 张图、832 target size 上的 NCCL/CUDA illegal memory access | 失败路径 OOM/illegal memory；单卡 512 profile 峰值 `14081 MiB` |
 | 容器启动 | `docker.py` | 不再把 `HF_HOME` / hub cache 覆盖到 `/cache/huggingface` | 保持 Dockerfile 的 `/models/.cache/huggingface` 默认，否则 Wan/MoGe/SAM3/WorldStereo 解析会失败 | 不是显存优化 |
 | 离线模型 | `worldstereo_wrapper.py` | `_resolve_local_snapshot()` 将 Wan base model repo id 解析到本地 HF snapshot | 避免离线/镜像环境下 diffusers 尝试访问 Hugging Face | 不是显存优化 |
 | WorldStereo | `worldstereo_wrapper.py` | `WS_TEXT_DTYPE=bf16` 控制 UMT5/CLIP 加载 dtype | 降低文本和图像编码器权重占用 | 组件估算：UMT5 约节省 `12.5 GiB/card`，CLIP 约减半；需保留全流程实测 |
@@ -32,7 +34,7 @@
 | Stage3 | `video_gen.py` | `WS_AUX_OFFLOAD=1` 时 WorldStereo denoise 前把 MoGe/SAM3 移到 CPU，之后移回 | MoGe/SAM3 只在 retrieval/update_memory 用，denoise 时不应常驻 GPU | 注释记录约释放 `4.4 GiB/card`；Claude 日志中 denoise 前 allocated 约 `21.3 GiB/card` |
 | Stage3 | `video_gen.py` | WorldMirror 前 `del worldstereo` 并清空 CUDA cache | WorldMirror 子进程会加载独立模型，避免与 WorldStereo FSDP 模型叠加 | 注释记录 WorldStereo transformer 约 `14 GiB/card`；实际避免了 WorldMirror OOM/冲突 |
 | Stage3 | `retrieval_wm.py` | SAM3 / DINOv2 / WorldMirror model path 支持环境变量 | 支持本地 gated/cached 模型 | 不是显存优化 |
-| Stage3 | `retrieval_wm.py` | WorldMirror 支持 `WORLDMIRROR_NPROC_PER_NODE`、`WORLDMIRROR_TARGET_SIZE`、`WORLDMIRROR_USE_FSDP`、`WORLDMIRROR_ENABLE_BF16`、`WORLDMIRROR_CUDA_VISIBLE_DEVICES` | 允许在 2 卡 FSDP 失败时走单进程 512 target size fallback | 单卡 512 成功；2 卡 832 失败，峰值待采样 |
+| Stage3 | `retrieval_wm.py` | WorldMirror 支持 `WORLDMIRROR_NPROC_PER_NODE`、`WORLDMIRROR_TARGET_SIZE`、`WORLDMIRROR_USE_FSDP`、`WORLDMIRROR_ENABLE_BF16`、`WORLDMIRROR_CUDA_VISIBLE_DEVICES` | 允许在 2 卡 FSDP 失败时走单进程 512 target size fallback | 单卡 512 profile 峰值 `14081 MiB`；2 卡 832 失败 |
 | Stage3 | `retrieval_wm.py` | 单进程 WorldMirror 子进程清理 `RANK` / `WORLD_SIZE` 等分布式环境变量 | 避免 `python -m worldrecon.pipeline` 误判为分布式运行 | 不是显存优化 |
 | 分布式兼容 | `src/sp_utils/communications.py` | 用 `all_gather` 实现 `_all_to_all_single_via_gather()` 替代 NCCL `all_to_all_single` | 避开 Blackwell sm_120 + torch 2.7 上 NCCL all-to-all illegal memory access | 不是显存降低，可能增加临时通信显存；为兼容性修复 |
 | WorldMirror | `inference_utils.py` | skyseg ONNX 缺失或 onnxruntime 初始化失败时，`source=auto` 回退到模型预测或全 sky mask | 避免离线缺少 `skyseg.onnx` 时失败 | 不是显存优化 |
@@ -58,7 +60,7 @@
 1. Panogen：文本到 panorama。
 2. Stage1：`traj_generate.py` + VLM shim，记录 VLM GPU 与主进程 GPU。
 3. Stage2：`traj_render.py` 多卡渲染。
-4. Stage3：`video_gen.py --fsdp --skip_exist`，记录 WorldStereo、WorldMirror fallback、alignment。
+4. Stage3：补充完整重算 profile；当前已采样 `video_gen.py --fsdp --skip_exist` 的 WorldStereo/FSDP load + resume skip 路径，以及 standalone WorldMirror fallback，尚未覆盖实际 video denoise 和 alignment 的完整峰值。
 5. Stage4：`gen_gs_data.py --save_normal --split_sky`。
 6. Stage5：单卡 `world_gs_trainer ... --ssim-lambda 0`。
 7. Viewer：`show_gs.py` 常驻显存。
@@ -69,6 +71,10 @@
 
 | 阶段 | 命令摘要 | GPU | 峰值显存 | 平均 GPU 利用率 | 证据 |
 | --- | --- | --- | --- | --- | --- |
+| Stage3 resume/load | `torchrun --nproc_per_node=2 video_gen.py --target_path case000 --fsdp --skip_exist --local_files_only` | 0 | `23621 MiB` | `0.42%` | `examples/worldgen/case000/gpu_profile_stage3_skip_load.json` |
+| Stage3 resume/load | 同上 | 1 | `23621 MiB` | `1.31%` | `examples/worldgen/case000/gpu_profile_stage3_skip_load.json` |
+| Stage3 WorldMirror fallback | `python -m hyworld2.worldrecon.pipeline ... --target_size 512 --enable_bf16 --disable_heads normal points gs` | 0 | `14081 MiB` | `35.11%` | `examples/worldgen/case000/gpu_profile_worldmirror.json` |
+| Stage3 WorldMirror fallback | 同上 | 1 | `3 MiB` | `0.00%` | `examples/worldgen/case000/gpu_profile_worldmirror.json` |
 | Stage4 | `torchrun --nproc_per_node=2 gen_gs_data.py --root_path case000 --save_normal --split_sky` | 0 | `4958 MiB` | `27.57%` | `examples/worldgen/case000/gpu_profile_stage4.json` |
 | Stage4 | 同上 | 1 | `3827 MiB` | `32.82%` | `examples/worldgen/case000/gpu_profile_stage4.json` |
 | Stage5 | `python -m world_gs_trainer ... --max_steps 4000 --ssim-lambda 0 --disable-viewer` | 0 | `3366 MiB` | `46.89%` | `examples/worldgen/case000/gpu_profile_stage5.json` |
