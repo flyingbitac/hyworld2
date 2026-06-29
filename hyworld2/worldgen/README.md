@@ -27,19 +27,11 @@ It covers the last three stages of the full HY-World 2.0 pipeline:
 
 - CUDA 12.8, Python 3.11+
 - &ge;4 GPUs recommended (tested with 8× H20)
-- A running [vLLM](https://vllm.ai/) server hosting a VLM (e.g. Qwen3-VL-8B) for trajectory planning (stages 1 & 2). You need to obtain `LLM_ADDR`, `LLM_PORT`, and `LLM_NAME` from your vLLM deployment and pass them as `--llm_addr`, `--llm_port`, `--llm_name` to `traj_generate.py` and `traj_render.py`. Example:
+- A running OpenAI-compatible VLM server (e.g. Qwen3-VL-8B) for trajectory planning (stages 1 & 2). The Docker image includes `scripts/launch_vlm.sh`, a lightweight transformers/FastAPI shim for Blackwell systems where vLLM/FlashInfer is unavailable. Start it on a separate GPU and pass `--llm_addr`, `--llm_port`, and `--llm_name` to `traj_generate.py` and `traj_render.py`. Example:
 
   ```bash
-  # Launch vLLM server (on a separate GPU group or machine)
-  CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 vllm serve Qwen/Qwen3-VL-8B-Instruct \
-      --served-model-name Qwen/Qwen3-VL-8B-Instruct \
-      --port 8000 \
-      --host 0.0.0.0 \
-      --tensor-parallel-size 8 \
-      --pipeline-parallel-size 1 \
-      --max-model-len 32768 \
-      --trust-remote-code \
-      --gpu-memory-utilization 0.80
+  # Launch the bundled VLM shim (on a separate GPU or machine)
+  CUDA_VISIBLE_DEVICES=1 PORT=8000 scripts/launch_vlm.sh
   ```
 
 - Model checkpoints for WorldStereo 2.0 (see [Model Zoo](../../README.md#-model-zoo), and codes will download weights automatically)
@@ -62,9 +54,9 @@ All stages share a common `--target_path` (scene directory) that accumulates int
 ```bash
 TARGET_PATH=/path/to/your/scene       # ../../examples/worldgen/case000
 RESULT_DIR=/path/to/output
-LLM_ADDR=0.0.0.0        # vLLM server address
-LLM_PORT=8000             # vLLM server port
-LLM_NAME=Qwen/Qwen3-VL-8B-Instruct  # Model name served by vLLM
+LLM_ADDR=0.0.0.0        # OpenAI-compatible VLM server address
+LLM_PORT=8000           # OpenAI-compatible VLM server port
+LLM_NAME=Qwen/Qwen3-VL-8B-Instruct
 
 # Stage 1: Trajectory Planning (single GPU)
 python traj_generate.py --target_path $TARGET_PATH \
