@@ -38,7 +38,7 @@ from diffusers.models import AutoencoderKLWan
 from diffusers.schedulers import UniPCMultistepScheduler
 from omegaconf import OmegaConf
 from safetensors.torch import load_file as load_safetensors
-from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
+from torch.distributed.fsdp import CPUOffloadPolicy, MixedPrecisionPolicy, fully_shard
 from transformers import AutoTokenizer, CLIPImageProcessor, CLIPVisionModel, UMT5EncoderModel
 
 from .attention import WanAttnProcessorSP
@@ -165,6 +165,13 @@ class WorldStereo:
             )
 
         cfg = OmegaConf.create(cls._load_hf_config(json_cfg_path))
+        # Prefer a locally-cached snapshot for base_model so loading never hits the
+        # network (huggingface.co is often unreachable / gated here). Falls back to
+        # the repo id if no cache entry exists.
+        cfg.base_model = cls._resolve_local_snapshot(cfg.base_model)
+        if local_files_only and not os.path.isdir(cfg.base_model):
+            from huggingface_hub import snapshot_download
+            cfg.base_model = snapshot_download(cfg.base_model, local_files_only=True)
         model_weights_path = safetensors_path
 
         model_type = subfolder
@@ -205,8 +212,35 @@ class WorldStereo:
             local_files_only=local_files_only,
         )
 
+        if os.environ.get("WS_AUX_OFFLOAD", "0") == "1" and not fsdp:
+            # Non-FSDP lazy offload only. Under FSDP, _load_aux passes CPUOffloadPolicy
+            # to fully_shard (per-op on/offload), so no manual .to() wrap is needed.
+            cls._install_encode_aware_offload(pipeline, device)
+
         rank0_log(f"WorldStereo ({model_type}) ready.")
         return cls(pipeline=pipeline, cfg=cfg)
+
+    @staticmethod
+    def _install_encode_aware_offload(pipeline, device):
+        import types as _types
+
+        def _wrap(name, module_attr):
+            orig = getattr(pipeline, name)
+
+            def _wrapped(self, *args, **kwargs):
+                enc = getattr(self, module_attr)
+                enc.to(device)
+                try:
+                    return orig(*args, **kwargs)
+                finally:
+                    enc.to("cpu")
+                    gc.collect()
+                    torch.cuda.empty_cache()
+
+            setattr(pipeline, name, _types.MethodType(_wrapped, pipeline))
+
+        _wrap("encode_image", "image_encoder")
+        _wrap("encode_prompt", "text_encoder")
 
     # ------------------------------------------------------------------
     # Convenience wrappers
@@ -238,6 +272,23 @@ class WorldStereo:
             )
 
         return cfg
+
+    @staticmethod
+    def _resolve_local_snapshot(repo_id: str) -> str:
+        """Return a locally-cached snapshot dir for a HF repo id, if present.
+
+        Keeps model loading off the network: huggingface.co is often unreachable
+        or gated in this environment, and diffusers' offline repo-id resolution is
+        flaky. If ``repo_id`` is already a local dir, or a snapshot exists under
+        ``$HF_HOME/hub/models--<org>--<name>/snapshots/*``, return that path.
+        """
+        import glob
+        if os.path.isdir(repo_id):
+            return repo_id
+        cache = os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
+        dashed = repo_id.replace("/", "--")
+        snaps = sorted(glob.glob(os.path.join(cache, "hub", f"models--{dashed}", "snapshots", "*")))
+        return snaps[0] if snaps else repo_id
 
     @staticmethod
     def _load_transformer(
@@ -348,20 +399,35 @@ class WorldStereo:
         import transformers as _tr
         from transformers.modeling_outputs import BaseModelOutput, BaseModelOutputWithPooling
 
+        # ── Low-VRAM knobs (2-GPU / small-VRAM runs) ─────────────────────────
+        # WS_TEXT_DTYPE: encoder load dtype. fp32 (upstream default, accurate) or
+        #   bf16 (halves encoder footprint: UMT5 25->12.5 GiB/card sharded).
+        # WS_AUX_OFFLOAD: keep text+image encoders off GPU during the denoise loop.
+        #   Under FSDP this is done via fully_shard's CPUOffloadPolicy (params live on
+        #   CPU, fetched to GPU per-op). Without FSDP the encoders are moved to CPU
+        #   after build and lazily fetched during encode (freed ~6 GiB/card).
+        _text_dtype_name = os.environ.get("WS_TEXT_DTYPE", "fp32")
+        text_dt = torch.bfloat16 if _text_dtype_name == "bf16" else torch.float32
+        aux_offload = os.environ.get("WS_AUX_OFFLOAD", "0") == "1"
+        rank0_log(f"aux encoders: dtype={_text_dtype_name} offload={aux_offload}")
+
         # ---- text encoder ----
         rank0_log("Loading TextEncoder (UMT5)…")
         text_encoder = UMT5EncoderModel.from_pretrained(
-            cfg.base_model, subfolder="text_encoder", torch_dtype=torch.float32, local_files_only=local_files_only
+            cfg.base_model, subfolder="text_encoder", torch_dtype=text_dt, local_files_only=local_files_only
         ).eval()
         if _tr.__version__ >= "5.0.0":
             rank0_log("Patching text_encoder.encoder.embed_tokens for transformers>=5.0.0", "WARNING")
             text_encoder.encoder.embed_tokens = text_encoder.shared
-        text_encoder = torch.compile(text_encoder)
+        # torch.compile + FSDP CPUOffload is unstable (illegal-memory-access in the
+        # forward); only compile when the encoder will stay resident on GPU.
+        if not aux_offload:
+            text_encoder = torch.compile(text_encoder)
 
         # ---- image encoder ----
         rank0_log("Loading ImageEncoder (CLIP)…")
         image_clip = CLIPVisionModel.from_pretrained(
-            cfg.base_model, subfolder="image_encoder", torch_dtype=torch.float32, local_files_only=local_files_only
+            cfg.base_model, subfolder="image_encoder", torch_dtype=text_dt, local_files_only=local_files_only
         ).eval()
         if _tr.__version__ >= "5.0.0":
             rank0_log("Patching CLIP vision forward for transformers>=5.0.0", "WARNING")
@@ -400,13 +466,22 @@ class WorldStereo:
         vae = torch.compile(vae)
 
         if fsdp:
+            # Compute the encoders in their load dtype (bf16 when WS_TEXT_DTYPE=bf16).
+            # The previous param_dtype=fp32 doubled the UMT5/CLIP GPU footprint during
+            # the encode forward (bf16 shard -> fp32 compute copy) and OOM'd at 32 GiB.
             fsdp_kwargs = dict(
                 mp_policy=MixedPrecisionPolicy(
-                    param_dtype=torch.float32, reduce_dtype=torch.float32,
+                    param_dtype=text_dt, reduce_dtype=text_dt,
                 ),
                 mesh=device_mesh["rep", "shard"],
                 reshard_after_forward=True,
             )
+            if aux_offload:
+                # Keep encoder params on CPU between ops; FSDP pulls them to GPU only
+                # during each encode forward, so they occupy no VRAM during the
+                # transformer denoise loop (the only config that fits a 32 GiB card).
+                fsdp_kwargs["offload_policy"] = CPUOffloadPolicy()
+                rank0_log("FSDP encoder CPUOffload enabled (WS_AUX_OFFLOAD=1).")
             for layer in text_encoder.encoder.block:
                 fully_shard(layer, **fsdp_kwargs)
             fully_shard(text_encoder, **fsdp_kwargs)
@@ -424,6 +499,18 @@ class WorldStereo:
             image_clip = image_clip.to(device=device)
 
         vae = vae.to(device=device)
+
+        if aux_offload and not fsdp:
+            # Non-FSDP path: encoders are only needed once per generation. Move them
+            # to CPU so they don't hold GPU during the denoise loop;
+            # _install_encode_aware_offload lazily fetches them per-encode. Under FSDP,
+            # fully_shard's CPUOffloadPolicy (above) handles offload instead.
+            rank0_log("Offloading text+image encoders to CPU (WS_AUX_OFFLOAD=1).")
+            text_encoder = text_encoder.to("cpu")
+            image_clip = image_clip.to("cpu")
+            gc.collect()
+            torch.cuda.empty_cache()
+
         return text_encoder, image_clip, vae
 
     @staticmethod

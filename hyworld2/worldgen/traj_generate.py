@@ -73,11 +73,14 @@ LLM_PORT = 8000
 
 SAM_BATCH_SIZE = 4
 MAX_MASK_COUNT = 5
-HF_CACHE_DIR = os.path.expanduser("~/.cache/huggingface/hub")
+HF_CACHE_DIR = os.environ.get(
+    "HUGGINGFACE_HUB_CACHE",
+    os.path.join(os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface")), "hub"),
+)
 ZIM_REPO_ID = "naver-iv/zim-anything-vitl"
 ZIM_SUBFOLDER = "zim_vit_l_2092"
 GD_REPO_ID = "IDEA-Research/grounding-dino-tiny"
-SAM3_REPO_ID = "facebook/sam3"
+SAM3_REPO_ID = os.environ.get("SAM3_REPO_ID", "facebook/sam3")
 MOGE_ID = "Ruicheng/moge-2-vitl-normal"
 
 
@@ -204,8 +207,8 @@ if __name__ == '__main__':
 
     # VLM & SAM3
     client = OpenAI(api_key="EMPTY", base_url=f"http://{LLM_ADDR}:{LLM_PORT}/v1")
-    sam3_model = Sam3Model.from_pretrained("facebook/sam3").to(device)
-    sam3_processor = Sam3Processor.from_pretrained("facebook/sam3")
+    sam3_model = Sam3Model.from_pretrained(SAM3_REPO_ID).to(device)
+    sam3_processor = Sam3Processor.from_pretrained(SAM3_REPO_ID)
     print("Models Initializing over.")
 
     # Near-view rotations used by regular trajectory generation.

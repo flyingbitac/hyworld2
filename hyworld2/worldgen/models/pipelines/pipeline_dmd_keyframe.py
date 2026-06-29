@@ -14,6 +14,9 @@
 
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
+import gc
+import os
+
 import torch
 from diffusers.callbacks import MultiPipelineCallbacks, PipelineCallback
 from diffusers.image_processor import PipelineImageInput
@@ -251,6 +254,15 @@ class RefKFDMDGeneratorPipeline(KeyframePipelineMixin, DiffusionPipeline, WanLor
         # Pre-expand all timesteps (avoid repeated expand in loop)
         expanded_timesteps = [t.expand(latents.shape[0]).to(device) for t in timesteps]
 
+        # WS_AUX_OFFLOAD: the VAE is idle during the denoise loop (it only encoded the
+        # condition above and will decode the output below). Park it on CPU to free
+        # ~2.7 GiB/card so the transformer forward fits on 32 GiB GPUs.
+        _offload_vae = os.environ.get("WS_AUX_OFFLOAD", "0") == "1"
+        if _offload_vae:
+            self.vae.to("cpu")
+            gc.collect()
+            torch.cuda.empty_cache()
+
         with self.progress_bar(total=len(timesteps)) as progress_bar:
             for i, t in enumerate(timesteps):
                 if self.interrupt:
@@ -324,6 +336,8 @@ class RefKFDMDGeneratorPipeline(KeyframePipelineMixin, DiffusionPipeline, WanLor
         self._current_timestep = None
 
         # 7. decode latent 2.5% 0.38s
+        if _offload_vae:
+            self.vae.to(device)
         if not output_type == "latent":
             latents = latents.to(self.vae.dtype)
             with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16, enabled=True):

@@ -3,6 +3,7 @@ import json
 import math
 import os
 import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from glob import glob
 from typing import Tuple, List
@@ -421,7 +422,7 @@ class CameraSelector:
         """Load the pretrained model."""
         if extractor == 'dinov2':
             from transformers import AutoImageProcessor, AutoModel
-            model_path = 'facebook/dinov2-base'
+            model_path = os.environ.get("CAMERA_SELECTOR_MODEL", "facebook/dinov2-base")
             self.processor = AutoImageProcessor.from_pretrained(model_path, use_fast=True)
             self.model = AutoModel.from_pretrained(model_path).to(self.device)
         else:
@@ -822,8 +823,9 @@ class PanoramaMemoryBank:
         rank0_log(f"Initializing SAM3 Model...")
         if sam3_model is None or sam3_processor is None:
             from transformers import Sam3VideoModel, Sam3VideoProcessor
-            self.sam3_model = Sam3VideoModel.from_pretrained("facebook/sam3").to(device, dtype=torch.bfloat16)
-            self.sam3_processor = Sam3VideoProcessor.from_pretrained("facebook/sam3")
+            _sam3_repo = os.environ.get("SAM3_REPO_ID", "facebook/sam3")
+            self.sam3_model = Sam3VideoModel.from_pretrained(_sam3_repo).to(device, dtype=torch.bfloat16)
+            self.sam3_processor = Sam3VideoProcessor.from_pretrained(_sam3_repo)
         else:
             self.sam3_model = sam3_model
             self.sam3_processor = sam3_processor
@@ -1131,12 +1133,22 @@ class PanoramaMemoryBank:
         torch.cuda.empty_cache()
         if self.rank == 0:
             if not (skip_exist and os.path.exists(f"{self.world_mirror_dir}/name_map.json")):
-                wm_cmd = [
-                    "torchrun", f"--nproc_per_node={self.world_size}", "-m", "worldrecon.pipeline",
+                wm_nproc = int(os.environ.get("WORLDMIRROR_NPROC_PER_NODE", self.world_size))
+                wm_target_size = os.environ.get("WORLDMIRROR_TARGET_SIZE", "832")
+                wm_use_fsdp = os.environ.get("WORLDMIRROR_USE_FSDP", "1" if wm_nproc > 1 else "0") != "0"
+                wm_enable_bf16 = os.environ.get("WORLDMIRROR_ENABLE_BF16", "1") != "0"
+
+                if wm_nproc > 1:
+                    wm_cmd = ["torchrun", f"--nproc_per_node={wm_nproc}", "-m", "worldrecon.pipeline"]
+                else:
+                    wm_cmd = [sys.executable, "-m", "worldrecon.pipeline"]
+
+                wm_cmd += [
+                    "--pretrained_model_name_or_path", os.environ.get("WORLDMIRROR_MODEL", "/models/HY-World-2.0"),
                     "--input_path", f"{self.world_mirror_dir}/images",
                     "--prior_cam_path", f"{self.world_mirror_dir}/cameras.json",
                     "--strict_output_path", f"{self.world_mirror_dir}/results",
-                    "--target_size", "832",
+                    "--target_size", wm_target_size,
                     "--log_time",
                     "--no_interactive",
                     "--no_save_gs",
@@ -1144,12 +1156,26 @@ class PanoramaMemoryBank:
                     "--no_save_points",
                     "--no_sky_mask",
                     "--no_edge_mask",
-                    "--use_fsdp",
-                    "--enable_bf16",
                     "--disable_heads", "normal", "points", "gs"
                 ]
+                if wm_use_fsdp:
+                    wm_cmd.append("--use_fsdp")
+                if wm_enable_bf16:
+                    wm_cmd.append("--enable_bf16")
                 color_print(f"[Rank0] Running World Mirror inference: {' '.join(wm_cmd)}", "info")
-                result = subprocess.run(wm_cmd, cwd="..")
+                # WorldMirror runs as a subprocess. Preserve the image/container HF
+                # defaults so local model resolution stays on the mounted /models tree.
+                _wm_env = os.environ.copy()
+                _wm_env.setdefault("HF_HOME", "/models/.cache/huggingface")
+                _wm_env.setdefault("HUGGINGFACE_HUB_CACHE", os.path.join(_wm_env["HF_HOME"], "hub"))
+                _wm_env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+                if "WORLDMIRROR_CUDA_VISIBLE_DEVICES" in _wm_env:
+                    _wm_env["CUDA_VISIBLE_DEVICES"] = _wm_env["WORLDMIRROR_CUDA_VISIBLE_DEVICES"]
+                if wm_nproc == 1:
+                    for key in ("RANK", "LOCAL_RANK", "WORLD_SIZE", "LOCAL_WORLD_SIZE", "GROUP_RANK",
+                                "ROLE_RANK", "ROLE_WORLD_SIZE", "MASTER_ADDR", "MASTER_PORT"):
+                        _wm_env.pop(key, None)
+                result = subprocess.run(wm_cmd, cwd="..", env=_wm_env)
 
                 if result.returncode != 0:
                     raise RuntimeError(f"World Mirror inference failed with return code {result.returncode}")

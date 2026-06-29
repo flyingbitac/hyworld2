@@ -23,7 +23,7 @@ from src.sp_utils.parallel_states import initialize_parallel_state
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 timer = Timer()
 
-SAM3_REPO_ID = "facebook/sam3"
+SAM3_REPO_ID = os.environ.get("SAM3_REPO_ID", "facebook/sam3")
 MOGE_ID = "Ruicheng/moge-2-vitl-normal"
 
 if __name__ == '__main__':
@@ -86,7 +86,7 @@ if __name__ == '__main__':
 
     # == Video Generation Inference ==
     worldstereo = WorldStereo.from_pretrained(
-        "hanshanxue/WorldStereo",
+        os.environ.get("WORLDSTEREO_REPO", "hanshanxue/WorldStereo"),
         subfolder=args.model_type,
         local_files_only=args.local_files_only,
         sp_world_size=sp_size,
@@ -190,8 +190,23 @@ if __name__ == '__main__':
                     pipeline_kwargs["guidance_scale"] = 5.0
 
                 # pipeline inference
-                with timer.track("Video Model Inference"), torch.autocast("cuda", dtype=autocast_dtype, enabled=autocast_dtype is not None):
-                    output = worldstereo.pipeline(**pipeline_kwargs).frames[0].float()
+                # MoGe/SAM3 are idle during the WorldStereo denoise loop (the memory
+                # bank only needs them for retrieval/update_memory, which bracket the
+                # generation). Park them on CPU during generation to free ~4.4 GiB/card
+                # so the WS forward fits on 32 GiB GPUs.
+                _offload_aux = os.environ.get("WS_AUX_OFFLOAD", "0") == "1"
+                if _offload_aux:
+                    moge_model.to("cpu")
+                    sam3_model.to("cpu")
+                    gc.collect()
+                    torch.cuda.empty_cache()
+                try:
+                    with timer.track("Video Model Inference"), torch.autocast("cuda", dtype=autocast_dtype, enabled=autocast_dtype is not None):
+                        output = worldstereo.pipeline(**pipeline_kwargs).frames[0].float()
+                finally:
+                    if _offload_aux:
+                        moge_model.to(device)
+                        sam3_model.to(device)
 
                 gc.collect()
                 torch.cuda.empty_cache()
@@ -209,6 +224,15 @@ if __name__ == '__main__':
                         gen_frames = load_video(f"{scene}/render_results/{view_id}/{traj_id}/{args.model_type}_result.mp4")
                     memory_bank.update_memory(gen_frames=gen_frames, tar_w2cs_full=tar_w2cs, tar_Ks_full=tar_Ks, view_id=view_id, traj_id=traj_id)
                 dist.barrier()
+
+            # Free the WorldStereo model from GPU before the memory-bank post-loop:
+            # World Mirror runs its OWN model on these same GPUs (subprocess) and OOMs
+            # if the WS transformer (~14 GiB/card, FSDP) stays resident. The FSDP
+            # transformer won't .to('cpu') (it errors), so drop the whole WS model
+            # (transformer+VAE+encoders) instead. moge/sam3 stay for alignment.
+            del worldstereo
+            gc.collect()
+            torch.cuda.empty_cache()
 
             if memory_bank is not None:
                 with timer.track("Run World Mirror"):
