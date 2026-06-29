@@ -19,6 +19,178 @@
 - Viewer 已完成常驻 GPU profile：单卡，GPU0 峰值 `1274 MiB` / 平均利用率 `0.27%`，GPU1 空闲。
 - 剩余未证明项：从文本到最终 3DGS 的单次自然退出全流程 profile 尚未完成。当前已有 Panogen、Stage1 true-VLM、Stage2 render+caption、Stage3 full attempt、Stage4、Stage5、viewer 的分段峰值证据；Stage3 full attempt 覆盖实际 denoise / WorldMirror / alignment 输出，但命令由人工 SIGTERM 停止，不能证明自然完整退出。按用户要求，不再重跑该长跑阶段。
 
+## 容器内从 prompt 生成 3D 场景
+
+下面是一条已按当前 Dockerfile 默认值整理过的最小操作路径。当前 `hyworld2/panogen/pipeline_with_qwen_image.py` 是 image-conditioned panorama 入口：需要一张输入图作为条件图，再用 `--prompt` 控制场景内容；如果已经有 `panorama.png`，可以直接跳到 Stage1。
+
+宿主机上先构建、启动并进入容器：
+
+```bash
+cd /home/zxh/ws/hyworld2
+python docker.py build
+python docker.py start
+python docker.py verify
+python docker.py enter
+```
+
+进入容器后，先设置本次 scene 路径和 prompt。`INPUT_IMAGE` 换成你的条件图；输出的全景图固定保存为 `$SCENE/panorama.png`，后续 Stage1-5 都复用同一个 `$SCENE`。
+
+```bash
+cd /workspace/hyworld2
+
+SCENE=/workspace/hyworld2/examples/worldgen/my_prompt_scene
+RESULT_DIR=$SCENE/gs_results_prompt
+INPUT_IMAGE=/workspace/hyworld2/examples/worldgen/case000/panorama.png
+PROMPT="a realistic sunny mountain village with stone paths, trees, and distant snow peaks"
+
+mkdir -p "$SCENE"
+```
+
+生成全景图。`balanced` 是本轮验证过的低显存加载方式；如果你已有 `panorama.png`，把已有文件放到 `$SCENE/panorama.png` 后跳过这一步。
+
+```bash
+cd /workspace/hyworld2/hyworld2/panogen
+
+CUDA_VISIBLE_DEVICES=0 /opt/miniconda3/bin/conda run -n hyworld2-pano \
+  python pipeline_with_qwen_image.py \
+    --image "$INPUT_IMAGE" \
+    --prompt "$PROMPT" \
+    --save "$SCENE/panorama.png" \
+    --pretrained-model-name-or-path /models/Qwen/Qwen-Image-Edit-2509 \
+    --lora-path /models/HY-World-2.0 \
+    --lora-subfolder HY-Pano-2.0 \
+    --height 960 \
+    --width 1952 \
+    --num-inference-steps 40 \
+    --load-strategy balanced \
+    --seed 42 \
+    --reproduce
+```
+
+启动 Stage1/2 需要的 OpenAI-compatible VLM server。建议让它占用 GPU1，Stage1/2 的主进程用 GPU0。
+
+```bash
+cd /workspace/hyworld2
+
+CUDA_VISIBLE_DEVICES=1 PORT=8000 scripts/launch_vlm.sh \
+  > /tmp/hyworld_vlm.log 2>&1 &
+VLM_PID=$!
+
+tail -f /tmp/hyworld_vlm.log
+```
+
+另开一个 shell 进入同一个容器，或 `Ctrl-C` 停止 `tail` 后继续执行。Stage1 生成导航目标、navmesh、上视角和 reconstruction iteration；`--force_vlm` 会强制重新请求 VLM。
+
+```bash
+cd /workspace/hyworld2/hyworld2/worldgen
+
+CUDA_VISIBLE_DEVICES=0 /opt/miniconda3/bin/conda run -n hyworld2 \
+  python traj_generate.py \
+    --target_path "$SCENE" \
+    --llm_addr localhost \
+    --llm_port 8000 \
+    --llm_name Qwen/Qwen3-VL-8B-Instruct \
+    --apply_nav_traj \
+    --apply_up_route \
+    --apply_recon_iteration \
+    --force_vlm
+```
+
+Stage2 渲染轨迹并让 VLM 写 caption。这里用单进程 GPU0；VLM server 继续占用 GPU1。
+
+```bash
+CUDA_VISIBLE_DEVICES=0 /opt/miniconda3/bin/conda run -n hyworld2 \
+  torchrun --nproc_per_node=1 traj_render.py \
+    --target_path "$SCENE" \
+    --llm_addr localhost \
+    --llm_port 8000 \
+    --llm_name Qwen/Qwen3-VL-8B-Instruct
+```
+
+Stage3 用 WorldStereo 扩展视频并调用 WorldMirror 生成 generation bank。Dockerfile 已默认设置本地模型路径、`WS_TEXT_DTYPE=bf16`、`WS_AUX_OFFLOAD=1` 和 WorldMirror 单卡 512 fallback；通常不需要再手动 export。
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 /opt/miniconda3/bin/conda run -n hyworld2 \
+  torchrun --nproc_per_node=2 video_gen.py \
+    --target_path "$SCENE" \
+    --fsdp \
+    --local_files_only
+```
+
+Stage4 生成 3DGS 训练数据。
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 /opt/miniconda3/bin/conda run -n hyworld2 \
+  torchrun --nproc_per_node=2 gen_gs_data.py \
+    --root_path "$SCENE" \
+    --save_normal \
+    --split_sky
+```
+
+Stage5 单卡训练 3DGS。当前 RTX 5090/sm_120 环境下 `fused_ssim` 不稳定，所以用 `--ssim-lambda 0`；`--max-steps 4000` 是本轮验证过的较快配置，可以按质量需求调高。
+
+```bash
+CUDA_VISIBLE_DEVICES=0 /opt/miniconda3/bin/conda run -n hyworld2 \
+  python -m world_gs_trainer default \
+    --data-dir "$SCENE/gs_data" \
+    --result-dir "$RESULT_DIR" \
+    --max-steps 4000 \
+    --save-steps 4000 \
+    --eval-steps 4000 \
+    --ply-steps 4000 \
+    --save-ply \
+    --convert-to-spz \
+    --disable-video \
+    --disable-viewer \
+    --use-scale-regularization \
+    --antialiased \
+    --depth-loss \
+    --normal-loss \
+    --sky-depth-from-pcd \
+    --use-mask-gaussian \
+    --mask-export-stochastic \
+    --no-mask-export-anchor-protection \
+    --use-anchor-protection \
+    --export-mesh \
+    --ssim-lambda 0 \
+    --strategy.refine-start-iter 150 \
+    --strategy.refine-stop-iter 2000 \
+    --strategy.refine-every 100 \
+    --strategy.refine-scale2d-stop-iter 2000 \
+    --strategy.reset-every 99990 \
+    --strategy.grow-grad2d 0.0001 \
+    --strategy.prune-scale3d 0.1
+```
+
+查看训练结果：
+
+```bash
+CKPT=$(ls "$RESULT_DIR"/ckpts/ckpt_*_rank0.pt | sort -V | tail -1)
+
+CUDA_VISIBLE_DEVICES=0 /opt/miniconda3/bin/conda run -n hyworld2 \
+  python show_gs.py \
+    --port 8081 \
+    --gpu_id 0 \
+    --ckpt "$CKPT"
+```
+
+常用参数说明：
+
+| 参数 / 环境变量 | 作用 |
+| --- | --- |
+| `SCENE` | scene 工作目录；必须包含或生成 `panorama.png`，后续中间产物都会写到这里 |
+| `PROMPT` | panogen 使用的文本描述；会追加到 Qwen-Image-Edit panorama 正向模板 |
+| `INPUT_IMAGE` | panogen 条件图；当前 CLI 不能只给纯文本 prompt |
+| `--load-strategy balanced` | Panogen 模型分布加载；本轮 profile 中比全放 GPU0 更稳 |
+| `--llm_addr` / `--llm_port` / `--llm_name` | Stage1/2 调用 OpenAI-compatible VLM server 的地址、端口和模型名 |
+| `--force_vlm` | Stage1 强制重新请求 VLM；复用已有 `objects.json` 时可去掉 |
+| `--skip_exist` | Stage1/3 可用于断点续跑，已有产物会跳过 |
+| `--fsdp` | Stage3 启用 WorldStereo FSDP，两卡路径用它降低单卡权重压力 |
+| `--local_files_only` | Stage3 禁止在线下载，只使用 Dockerfile 默认的 `/models` 本地权重 |
+| `WORLDMIRROR_NPROC_PER_NODE=1` | Dockerfile 默认值；让 WorldMirror 走单进程 fallback，避开 2 卡 FSDP illegal memory access |
+| `WORLDMIRROR_TARGET_SIZE=512` | Dockerfile 默认值；降低 WorldMirror 后处理显存 |
+| `--ssim-lambda 0` | Stage5 跳过当前环境不稳定的 fused SSIM CUDA kernel |
+
 ## 变更清单
 
 | 类别 | 文件 / 参数 | 修改 | 目的 | 显存影响 |
@@ -100,7 +272,7 @@
 | Stage3 WorldMirror fallback | 同上 | 1 | `3 MiB` | `0.00%` | `examples/worldgen/case000/gpu_profile_worldmirror.json` |
 | Stage4 | `torchrun --nproc_per_node=2 gen_gs_data.py --root_path case000 --save_normal --split_sky` | 0 | `4958 MiB` | `27.57%` | `examples/worldgen/case000/gpu_profile_stage4.json` |
 | Stage4 | 同上 | 1 | `3827 MiB` | `32.82%` | `examples/worldgen/case000/gpu_profile_stage4.json` |
-| Stage5 | `python -m world_gs_trainer ... --max_steps 4000 --ssim-lambda 0 --disable-viewer` | 0 | `3366 MiB` | `46.89%` | `examples/worldgen/case000/gpu_profile_stage5.json` |
+| Stage5 | `python -m world_gs_trainer ... --max-steps 4000 --ssim-lambda 0 --disable-viewer` | 0 | `3366 MiB` | `46.89%` | `examples/worldgen/case000/gpu_profile_stage5.json` |
 | Stage5 | 同上 | 1 | `3 MiB` | `0.00%` | `examples/worldgen/case000/gpu_profile_stage5.json` |
 | Viewer | `show_gs.py --ckpt gs_results_profile_stage5/ckpts/ckpt_3999_rank0.pt` | 0 | `1274 MiB` | `0.27%` | `examples/worldgen/case000/gpu_profile_viewer.json` |
 | Viewer | 同上 | 1 | `3 MiB` | `0.00%` | `examples/worldgen/case000/gpu_profile_viewer.json` |

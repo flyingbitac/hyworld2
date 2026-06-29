@@ -2,6 +2,11 @@ FROM nvcr.io/nvidia/isaac-lab:3.0.0-beta2
 
 SHELL ["/bin/bash", "-lc"]
 
+# Build-time switches:
+# - CUDA_ARCH_LIST defaults to Blackwell sm_120 for the local RTX 5090 setup.
+# - INSTALL_FLASH_ATTN uses a prebuilt cu128/torch2.7 wheel instead of compiling.
+# - INSTALL_WORLDGEN_EXTRAS controls the heavier source builds used by WorldNav
+#   and 3DGS (PyTorch3D CUDA rasterizer, fused kernels, navmesh bindings).
 ARG MINICONDA_URL=https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
 ARG CONDA_DIR=/opt/miniconda3
 ARG CUDA_ARCH_LIST=12.0
@@ -11,6 +16,9 @@ ARG FLASH_ATTN_WHEEL_URL=https://github.com/mjun0812/flash-attention-prebuild-wh
 
 USER root
 
+# Keep model and HF cache resolution inside /models. docker.py bind-mounts this
+# path from the host, so runtime commands can find gated/pre-downloaded weights
+# without extra environment exports.
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CONDA_DIR=${CONDA_DIR}
 ENV HYWORLD_ROOT=/workspace/hyworld2
@@ -28,6 +36,9 @@ ENV TORCH_CUDA_ARCH_LIST=${CUDA_ARCH_LIST}
 ENV MAX_JOBS=8
 ENV INSTALL_WORLDGEN_EXTRAS=${INSTALL_WORLDGEN_EXTRAS}
 
+# System packages needed by CUDA extensions, rendering utilities, navmesh, and
+# image/video preprocessing. libglm-dev replaces an untracked vendored GLM copy
+# for the custom gsplat extension build.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         bash-completion \
         build-essential \
@@ -48,6 +59,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# The Isaac Lab base image is not enough for sm_120 extension builds; install
+# the CUDA 12.8 toolkit so PyTorch3D/gsplat/fused kernels can compile in-image.
 RUN wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb -O /tmp/cuda-keyring.deb \
     && dpkg -i /tmp/cuda-keyring.deb \
     && rm /tmp/cuda-keyring.deb \
@@ -55,6 +68,9 @@ RUN wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/
     && apt-get install -y --no-install-recommends cuda-toolkit-12-8 \
     && rm -rf /var/lib/apt/lists/*
 
+# Install Miniconda next to Isaac Lab's Python. The main repository uses two
+# separate envs: hyworld2 for WorldNav/WorldStereo/WorldMirror/3DGS, and
+# hyworld2-pano for panorama generation plus the lightweight VLM shim.
 RUN wget -q "${MINICONDA_URL}" -O /tmp/miniconda.sh \
     && bash /tmp/miniconda.sh -b -p "${CONDA_DIR}" \
     && rm /tmp/miniconda.sh \
@@ -67,6 +83,9 @@ RUN wget -q "${MINICONDA_URL}" -O /tmp/miniconda.sh \
 COPY . ${HYWORLD_ROOT}
 WORKDIR ${HYWORLD_ROOT}
 
+# Main worldgen environment. Keep PyTorch pinned to cu128, install project
+# requirements, build the custom gsplat fork, optionally install flash-attn from
+# the prebuilt wheel, then compile source-only worldgen extras with CUDA enabled.
 RUN set -euo pipefail \
     && "${CONDA_DIR}/bin/conda" create -y -n hyworld2 python=3.11.15 pip \
     && "${CONDA_DIR}/bin/conda" run -n hyworld2 python -m pip install --upgrade pip setuptools wheel \
@@ -94,6 +113,8 @@ RUN set -euo pipefail \
     fi \
     && "${CONDA_DIR}/bin/conda" clean -afy
 
+# Panorama/VLM environment. This isolates the Qwen-Image-Edit/HY-Pano stack from
+# the main worldgen env and is also used by scripts/launch_vlm.sh.
 RUN "${CONDA_DIR}/bin/conda" create -y -n hyworld2-pano python=3.10 pip \
     && "${CONDA_DIR}/bin/conda" run -n hyworld2-pano python -m pip install --upgrade pip setuptools wheel \
     && "${CONDA_DIR}/bin/conda" run -n hyworld2-pano python -m pip install \
@@ -109,8 +130,12 @@ alias hyworld='conda activate hyworld2'
 alias hypano='conda activate hyworld2-pano'
 EOF
 
+# Make imports work for scripts run directly from /workspace/hyworld2 or its
+# subdirectories, matching the paths used in the original project scripts.
 ENV PYTHONPATH=/workspace/hyworld2:/workspace/hyworld2/hyworld2/worldgen:/workspace/hyworld2/hyworld2/panogen
 
+# Build-time smoke tests catch missing compiled modules before the image is used
+# for long worldgen jobs.
 RUN "${CONDA_DIR}/bin/conda" run -n hyworld2 python -c \
         "import os, torch, diffusers, transformers; __import__('recast') if os.environ.get('INSTALL_WORLDGEN_EXTRAS', '1') == '1' else None; import hyworld2.worldrecon.pipeline; print('hyworld2 build check ok', torch.__version__, diffusers.__version__, transformers.__version__)" \
     && cd hyworld2/panogen \
