@@ -17,7 +17,7 @@
 - Stage4 已完成阶段级 GPU profile：2 卡，GPU0 峰值 `4958 MiB` / 平均利用率 `27.57%`，GPU1 峰值 `3827 MiB` / 平均利用率 `32.82%`。
 - Stage5 已完成阶段级 GPU profile：单卡，GPU0 峰值 `3366 MiB` / 平均利用率 `46.89%`，GPU1 空闲。
 - Viewer 已完成常驻 GPU profile：单卡，GPU0 峰值 `1274 MiB` / 平均利用率 `0.27%`，GPU1 空闲。
-- 仍需补充：从文本到最终 3DGS 的完整 GPU 峰值采样。当前已有 Stage1 skip-existing、Stage3 resume/load、Stage4、Stage5、viewer 实测，组件级/阶段日志级和失败路径证据。
+- 剩余未证明项：从文本到最终 3DGS 的单次自然退出全流程 profile 尚未完成。当前已有 Panogen、Stage1 true-VLM、Stage2 render+caption、Stage3 full attempt、Stage4、Stage5、viewer 的分段峰值证据；Stage3 full attempt 覆盖实际 denoise / WorldMirror / alignment 输出，但命令由人工 SIGTERM 停止，不能证明自然完整退出。按用户要求，不再重跑该长跑阶段。
 
 ## 变更清单
 
@@ -61,6 +61,7 @@
 ## 已知失败路径
 
 - Stage3 WorldMirror：`torchrun --nproc_per_node=2 ... --target_size 832 --use_fsdp --enable_bf16` 在 291 张图上出现 NCCL watchdog / CUDA illegal memory access，部分日志也显示接近 31 GiB 卡容量后 OOM。
+- Stage3 full natural-exit profile：`video_gen.py --fsdp --local_files_only` 的 full attempt 已产出 33 个 WorldStereo 视频、291 个 WorldMirror depth、`aligned_pcd.ply` 和 `global_pcd.ply`，但在两卡仍接近满载时由人工 SIGTERM 停止；这证明峰值区间，不证明自然退出。用户已明确要求不再重跑该长跑阶段。
 - Stage5 2 卡训练：在 gsplat rasterizer / NCCL 路径上仍会触发 CUDA illegal memory access。当前可用路径为单卡训练。
 - Stage5 默认 SSIM：`fused_ssim` CUDA kernel 在当前 RTX 5090/sm_120 环境不可用，需 `--ssim-lambda 0`。
 - Stage3 alignment：case000 的 generated videos 被判定为 outlier，generation-bank `aligned_pcd.ply` 为 dummy-sized；Stage4/5 仍能从其他数据生成可训练 `gs_data`。
