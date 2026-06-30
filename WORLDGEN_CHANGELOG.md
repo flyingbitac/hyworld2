@@ -19,9 +19,9 @@
 - Viewer 已完成常驻 GPU profile：单卡，GPU0 峰值 `1274 MiB` / 平均利用率 `0.27%`，GPU1 空闲。
 - 剩余未证明项：从文本到最终 3DGS 的单次自然退出全流程 profile 尚未完成。当前已有 Panogen、Stage1 true-VLM、Stage2 render+caption、Stage3 full attempt、Stage4、Stage5、viewer 的分段峰值证据；Stage3 full attempt 覆盖实际 denoise / WorldMirror / alignment 输出，但命令由人工 SIGTERM 停止，不能证明自然完整退出。按用户要求，不再重跑该长跑阶段。
 
-## 容器内从 prompt 生成 3D 场景
+## 容器内从条件图 + prompt 生成 3D 场景
 
-下面是一条已按当前 Dockerfile 默认值整理过的最小操作路径。当前 `hyworld2/panogen/pipeline_with_qwen_image.py` 是 image-conditioned panorama 入口：需要一张输入图作为条件图，再用 `--prompt` 控制场景内容；如果已经有 `panorama.png`，可以直接跳到 Stage1。
+下面是一条已按当前 Dockerfile 默认值整理过的最小操作路径。当前仓库里的 `hyworld2/panogen/pipeline_with_qwen_image.py` 和 `hyworld2/panogen/pipeline.py` 都是 image-conditioned panorama 入口：需要一张输入图作为条件图，再用 `--prompt` 控制场景内容、风格和细节；它们不是纯 text-to-panorama 入口。若只想从纯文字开始，需要先用其他 text-to-image 工具生成一张条件图，或直接准备一张已有 panorama 并跳到 Stage1。
 
 宿主机上先构建、启动并进入容器：
 
