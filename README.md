@@ -1,3 +1,212 @@
+## Docker 容器用法与 Prompt 生成 3D 场景教程
+
+这份 fork 提供了两套 Docker 镜像：
+
+| 变体 | 镜像 | 容器名 | 适用场景 |
+|------|------|--------|----------|
+| `isaac` | `hyworld2-isaaclab:3.0.0-beta2` | `hyworld2-isaaclab` | 需要 Isaac Lab / Isaac Sim 运行时，或希望使用完整本地环境。 |
+| `base` | `hyworld2-base:3.0.0-beta2` | `hyworld2-base` | 不需要 Isaac 的普通 HY-World 推理、全景图和 3DGS 生成。 |
+
+论文把 HY-World 2.0 表述为支持 `text prompts`、`single-view images`、`multi-view images` 和 `videos` 等输入，并说明 HY-Pano 2.0 用于从文本或单视图图像生成全景图。本仓库当前开源的 `hyworld2/panogen` CLI/API 示例仍然是图像条件入口：`pipeline.py` 和 `pipeline_with_qwen_image.py` 都要求传入 `--image`，再用 `--prompt` 控制风格和内容。因此，本地从“纯文本 prompt”开始时，推荐先用 `flux2` 环境生成一张条件图，再把这张图交给 HY-Pano 生成 360 度全景图。
+
+### 1. 在宿主机启动容器
+
+```bash
+cd /home/zxh/ws/hyworld2
+
+# Isaac 版本
+python docker.py isaac build
+python docker.py isaac start
+python docker.py isaac verify
+python docker.py isaac enter
+
+# 非 Isaac 版本，命令形态相同
+python docker.py base build
+python docker.py base start
+python docker.py base verify
+python docker.py base enter
+```
+
+常用宿主机命令：
+
+```bash
+python docker.py isaac status
+python docker.py isaac exec nvidia-smi
+python docker.py isaac stop
+```
+
+`docker.py` 默认把仓库挂载到容器内 `/workspace/hyworld2`，把模型目录 `/data/hyworld/models` 挂载到 `/models`，并挂载 Hugging Face、Torch 和 Matplotlib 缓存目录。容器内常用 conda 环境如下：
+
+| 环境 | 用途 |
+|------|------|
+| `hyworld2` | WorldNav、WorldStereo、WorldMirror、3DGS 训练和查看。 |
+| `hyworld2-pano` | HY-Pano 2.0 全景图生成，以及 WorldNav 使用的 VLM shim。 |
+| `flux2` | FLUX.2 Klein 文本生成条件图，不污染 `hyworld2-pano` 的 diffusers 版本。 |
+
+下面的长推理命令都使用 `conda run --no-capture-output` 和 `python -u`，避免 `conda run` 缓冲日志导致终端长时间看不到进度。
+
+### 2. 进入容器后设置场景变量
+
+```bash
+cd /workspace/hyworld2
+
+SCENE=/workspace/hyworld2/examples/worldgen/my_prompt_scene
+RESULT_DIR=$SCENE/gs_results_prompt
+PROMPT="a realistic sunny mountain village with stone paths, trees, and distant snow peaks"
+
+mkdir -p "$SCENE"
+```
+
+后续命令默认模型已经在 `/models` 下，例如 `/models/HY-World-2.0`、`/models/Qwen/Qwen-Image-Edit-2509`、`/models/FLUX.2-klein-4B` 或 `/models/FLUX.2-klein-9B`。
+
+### 3. 从纯文本 prompt 生成条件图
+
+如果你已经有一张输入图，可以跳过这一步，直接设置：
+
+```bash
+INPUT_IMAGE=/path/to/your/input.png
+```
+
+如果只有文字 prompt，先生成一张条件图：
+
+```bash
+cd /workspace/hyworld2
+
+CUDA_VISIBLE_DEVICES=0 /opt/miniconda3/bin/conda run --no-capture-output -n flux2 \
+  python -u scripts/flux2_klein_text2img.py \
+    --model 4b \
+    --prompt "$PROMPT" \
+    --output "$SCENE/condition.png" \
+    --height 1024 \
+    --width 1024 \
+    --steps 4 \
+    --guidance-scale 1.0 \
+    --seed 42 \
+    --placement offload
+
+INPUT_IMAGE=$SCENE/condition.png
+```
+
+关键参数：
+
+| 参数 | 说明 |
+|------|------|
+| `--model` | `4b` 更省显存，`9b` 质量更高但更慢、更占显存。 |
+| `--model-path` | 覆盖默认模型路径，用于测试其它本地 FLUX.2 Klein 权重。 |
+| `--height` / `--width` | 条件图分辨率；1024x1024 是常用起点。 |
+| `--steps` | FLUX.2 采样步数；烟测可用 1，正式生成建议从 4 开始。 |
+| `--placement` | `offload` 降低峰值显存；`cuda` 更快但更吃显存。 |
+
+### 4. 生成 360 度全景图
+
+如果 `$SCENE/panorama.png` 已存在，可以跳过本节。否则用条件图和 prompt 生成全景图：
+
+```bash
+cd /workspace/hyworld2/hyworld2/panogen
+
+CUDA_VISIBLE_DEVICES=0 /opt/miniconda3/bin/conda run --no-capture-output -n hyworld2-pano \
+  python -u pipeline_with_qwen_image.py \
+    --image "$INPUT_IMAGE" \
+    --prompt "$PROMPT" \
+    --save "$SCENE/panorama.png" \
+    --pretrained-model-name-or-path /models/Qwen/Qwen-Image-Edit-2509 \
+    --lora-path /models/HY-World-2.0 \
+    --lora-subfolder HY-Pano-2.0 \
+    --height 960 \
+    --width 1952 \
+    --num-inference-steps 4 \
+    --load-strategy sequential-offload \
+    --seed 42 \
+    --reproduce
+```
+
+关键参数：
+
+| 参数 | 说明 |
+|------|------|
+| `--image` | 必填；当前开源 CLI 用它作为全景图生成的条件图。 |
+| `--prompt` | 控制场景语义、风格和补全方向。 |
+| `--height` / `--width` | 全景图分辨率，默认示例为 960x1952。 |
+| `--num-inference-steps` | 采样步数；先用 `4` 验证输出非空，再逐步加到 `8/16/24`。不要一开始直接 40。 |
+| `--load-strategy` | 推荐 `sequential-offload`。`balanced` 已禁用；`cpu-offload` 曾在 32GB 卡上 OOM。 |
+
+### 5. 运行 WorldNav、WorldStereo、WorldMirror 和 3DGS
+
+Stage 1/2 需要一个 OpenAI-compatible VLM 服务。先在 GPU1 启动本地 shim：
+
+```bash
+cd /workspace/hyworld2
+CUDA_VISIBLE_DEVICES=1 PORT=8000 scripts/launch_vlm.sh > /tmp/hyworld_vlm.log 2>&1 &
+```
+
+然后执行五个阶段：
+
+```bash
+cd /workspace/hyworld2/hyworld2/worldgen
+
+# Stage 1: 轨迹规划。
+CUDA_VISIBLE_DEVICES=0 /opt/miniconda3/bin/conda run --no-capture-output -n hyworld2 \
+  python -u traj_generate.py \
+    --target_path "$SCENE" \
+    --llm_addr localhost --llm_port 8000 --llm_name Qwen/Qwen3-VL-8B-Instruct \
+    --apply_nav_traj --apply_up_route --apply_recon_iteration --force_vlm
+
+# Stage 2: 轨迹渲染和 VLM caption。
+CUDA_VISIBLE_DEVICES=0 /opt/miniconda3/bin/conda run --no-capture-output -n hyworld2 \
+  torchrun --nproc_per_node=1 traj_render.py \
+    --target_path "$SCENE" \
+    --llm_addr localhost --llm_port 8000 --llm_name Qwen/Qwen3-VL-8B-Instruct
+
+# Stage 3: WorldStereo 扩展视角 + WorldMirror generation bank。
+CUDA_VISIBLE_DEVICES=0,1 /opt/miniconda3/bin/conda run --no-capture-output -n hyworld2 \
+  torchrun --nproc_per_node=2 video_gen.py \
+    --target_path "$SCENE" --fsdp --local_files_only
+
+# Stage 4: 准备 3DGS 训练数据。
+CUDA_VISIBLE_DEVICES=0,1 /opt/miniconda3/bin/conda run --no-capture-output -n hyworld2 \
+  torchrun --nproc_per_node=2 gen_gs_data.py \
+    --root_path "$SCENE" --save_normal --split_sky
+
+# Stage 5: 训练并导出 3DGS。--ssim-lambda 0 用于避开测试环境中
+# RTX 5090/sm_120 上不稳定的 fused SSIM kernel 路径。
+CUDA_VISIBLE_DEVICES=0 /opt/miniconda3/bin/conda run --no-capture-output -n hyworld2 \
+  python -u -m world_gs_trainer default \
+    --data-dir "$SCENE/gs_data" \
+    --result-dir "$RESULT_DIR" \
+    --max-steps 4000 --save-steps 4000 --eval-steps 4000 --ply-steps 4000 \
+    --save-ply --convert-to-spz --disable-video --disable-viewer \
+    --use-scale-regularization --antialiased \
+    --depth-loss --normal-loss --sky-depth-from-pcd \
+    --use-mask-gaussian --mask-export-stochastic \
+    --no-mask-export-anchor-protection --use-anchor-protection --export-mesh \
+    --ssim-lambda 0 \
+    --strategy.refine-start-iter 150 \
+    --strategy.refine-stop-iter 2000 \
+    --strategy.refine-every 100 \
+    --strategy.refine-scale2d-stop-iter 2000 \
+    --strategy.reset-every 99990 \
+    --strategy.grow-grad2d 0.0001 \
+    --strategy.prune-scale3d 0.1
+```
+
+恢复中断任务时常用参数：
+
+| 参数 | 用途 |
+|------|------|
+| `--skip_exist` | 跳过已经存在的 Stage1/Stage3 产物，适合 resume。 |
+| `--local_files_only` | 只使用本地模型缓存，避免运行时访问 Hugging Face。 |
+| `--fsdp` | Stage3 多卡 WorldStereo/WorldMirror 路径。 |
+
+### 6. 查看生成的 3DGS
+
+```bash
+CKPT=$(ls "$RESULT_DIR"/ckpts/ckpt_*_rank0.pt | sort -V | tail -1)
+
+CUDA_VISIBLE_DEVICES=0 /opt/miniconda3/bin/conda run --no-capture-output -n hyworld2 \
+  python -u show_gs.py --port 8081 --gpu_id 0 --ckpt "$CKPT"
+```
+
+Dockerfile 默认设置了 `/models` 模型路径、`WS_TEXT_DTYPE=bf16`、`WS_AUX_OFFLOAD=1`、WorldMirror 单卡 `512` fallback，以及 PyTorch CUDA allocator 的 `expandable_segments`。更多本地实测显存、失败记录和长流程 runbook 见 `WORLDGEN_CHANGELOG.md`。
 
 
 <h1>HY-World 2.0: A Multi-Modal World Model for Reconstructing, Generating, and Simulating 3D Worlds</h1>
@@ -23,122 +232,6 @@
 <p align="center">
   <i>"What Is Now Proved Was Once Only Imagined"</i>
 </p>
-
-## Docker Quick Start: Condition Image + Prompt to 3DGS
-
-This fork includes a Docker workflow for the local world-generation pipeline. The currently open-sourced panorama CLIs are image-conditioned: provide a condition image with `--image`, then use `--prompt` to steer the generated panorama. If you already have a `panorama.png`, place it in the scene directory and skip the panorama step. The paper describes text-to-panorama support, but this repository's README/CLI examples do not expose a pure text-only panorama command.
-
-On the host, build, start, verify, and enter the container:
-
-```bash
-cd /home/zxh/ws/hyworld2
-python docker.py build
-python docker.py start
-python docker.py verify
-python docker.py enter
-```
-
-Inside the container, set paths for one scene:
-
-```bash
-cd /workspace/hyworld2
-
-SCENE=/workspace/hyworld2/examples/worldgen/my_prompt_scene
-RESULT_DIR=$SCENE/gs_results_prompt
-INPUT_IMAGE=/workspace/hyworld2/examples/worldgen/case000/panorama.png
-PROMPT="a realistic sunny mountain village with stone paths, trees, and distant snow peaks"
-
-mkdir -p "$SCENE"
-```
-
-Generate the panorama. Skip this block if `$SCENE/panorama.png` already exists.
-
-```bash
-cd /workspace/hyworld2/hyworld2/panogen
-
-CUDA_VISIBLE_DEVICES=0 /opt/miniconda3/bin/conda run -n hyworld2-pano \
-  python pipeline_with_qwen_image.py \
-    --image "$INPUT_IMAGE" \
-    --prompt "$PROMPT" \
-    --save "$SCENE/panorama.png" \
-    --pretrained-model-name-or-path /models/Qwen/Qwen-Image-Edit-2509 \
-    --lora-path /models/HY-World-2.0 \
-    --lora-subfolder HY-Pano-2.0 \
-    --height 960 \
-    --width 1952 \
-    --num-inference-steps 40 \
-    --load-strategy balanced \
-    --seed 42 \
-    --reproduce
-```
-
-Start the OpenAI-compatible VLM shim for WorldNav stages 1-2 on GPU1:
-
-```bash
-cd /workspace/hyworld2
-CUDA_VISIBLE_DEVICES=1 PORT=8000 scripts/launch_vlm.sh > /tmp/hyworld_vlm.log 2>&1 &
-```
-
-Run stages 1-5:
-
-```bash
-cd /workspace/hyworld2/hyworld2/worldgen
-
-# Stage 1: trajectory planning.
-CUDA_VISIBLE_DEVICES=0 /opt/miniconda3/bin/conda run -n hyworld2 \
-  python traj_generate.py \
-    --target_path "$SCENE" \
-    --llm_addr localhost --llm_port 8000 --llm_name Qwen/Qwen3-VL-8B-Instruct \
-    --apply_nav_traj --apply_up_route --apply_recon_iteration --force_vlm
-
-# Stage 2: trajectory rendering and VLM captions.
-CUDA_VISIBLE_DEVICES=0 /opt/miniconda3/bin/conda run -n hyworld2 \
-  torchrun --nproc_per_node=1 traj_render.py \
-    --target_path "$SCENE" \
-    --llm_addr localhost --llm_port 8000 --llm_name Qwen/Qwen3-VL-8B-Instruct
-
-# Stage 3: WorldStereo expansion + WorldMirror generation bank.
-CUDA_VISIBLE_DEVICES=0,1 /opt/miniconda3/bin/conda run -n hyworld2 \
-  torchrun --nproc_per_node=2 video_gen.py \
-    --target_path "$SCENE" --fsdp --local_files_only
-
-# Stage 4: prepare 3DGS training data.
-CUDA_VISIBLE_DEVICES=0,1 /opt/miniconda3/bin/conda run -n hyworld2 \
-  torchrun --nproc_per_node=2 gen_gs_data.py \
-    --root_path "$SCENE" --save_normal --split_sky
-
-# Stage 5: single-GPU 3DGS training. --ssim-lambda 0 avoids the fused SSIM
-# kernel path that is unstable on the tested RTX 5090/sm_120 setup.
-CUDA_VISIBLE_DEVICES=0 /opt/miniconda3/bin/conda run -n hyworld2 \
-  python -m world_gs_trainer default \
-    --data-dir "$SCENE/gs_data" \
-    --result-dir "$RESULT_DIR" \
-    --max-steps 4000 --save-steps 4000 --eval-steps 4000 --ply-steps 4000 \
-    --save-ply --convert-to-spz --disable-video --disable-viewer \
-    --use-scale-regularization --antialiased \
-    --depth-loss --normal-loss --sky-depth-from-pcd \
-    --use-mask-gaussian --mask-export-stochastic \
-    --no-mask-export-anchor-protection --use-anchor-protection --export-mesh \
-    --ssim-lambda 0 \
-    --strategy.refine-start-iter 150 \
-    --strategy.refine-stop-iter 2000 \
-    --strategy.refine-every 100 \
-    --strategy.refine-scale2d-stop-iter 2000 \
-    --strategy.reset-every 99990 \
-    --strategy.grow-grad2d 0.0001 \
-    --strategy.prune-scale3d 0.1
-```
-
-View the trained 3DGS:
-
-```bash
-CKPT=$(ls "$RESULT_DIR"/ckpts/ckpt_*_rank0.pt | sort -V | tail -1)
-
-CUDA_VISIBLE_DEVICES=0 /opt/miniconda3/bin/conda run -n hyworld2 \
-  python show_gs.py --port 8081 --gpu_id 0 --ckpt "$CKPT"
-```
-
-Useful knobs: `--skip_exist` resumes existing Stage1/Stage3 outputs; Dockerfile defaults set `/models` model paths, `WS_TEXT_DTYPE=bf16`, `WS_AUX_OFFLOAD=1`, and the WorldMirror single-GPU `512` fallback. See `WORLDGEN_CHANGELOG.md` for measured GPU peaks, failure notes, and the longer local runbook.
 
 ## 🎥 Video
 https://github.com/user-attachments/assets/b56f4750-25c9-48fb-83ff-d58526711463

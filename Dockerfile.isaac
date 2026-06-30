@@ -124,10 +124,24 @@ RUN "${CONDA_DIR}/bin/conda" create -y -n hyworld2-pano python=3.10 pip \
     && "${CONDA_DIR}/bin/conda" run -n hyworld2-pano python -m pip install peft==0.18.1 \
     && "${CONDA_DIR}/bin/conda" clean -afy
 
+# FLUX.2 Klein text-to-image environment. Keep this separate from hyworld2-pano:
+# Klein needs the current Diffusers Flux2KleinPipeline, while HY-Pano currently
+# pins diffusers/safetensors versions through hunyuan-image-3.
+RUN "${CONDA_DIR}/bin/conda" create -y -n flux2 python=3.10 pip \
+    && "${CONDA_DIR}/bin/conda" run -n flux2 python -m pip install --upgrade pip setuptools wheel \
+    && "${CONDA_DIR}/bin/conda" run -n flux2 python -m pip install \
+        torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 \
+        --index-url https://download.pytorch.org/whl/cu128 \
+    && "${CONDA_DIR}/bin/conda" run -n flux2 python -m pip install \
+        git+https://github.com/huggingface/diffusers.git \
+        transformers==4.57.1 accelerate bitsandbytes safetensors sentencepiece protobuf \
+    && "${CONDA_DIR}/bin/conda" clean -afy
+
 RUN cat >/etc/profile.d/hyworld-conda.sh <<'EOF'
 source /opt/miniconda3/etc/profile.d/conda.sh
 alias hyworld='conda activate hyworld2'
 alias hypano='conda activate hyworld2-pano'
+alias flux2='conda activate flux2'
 EOF
 
 # Make imports work for scripts run directly from /workspace/hyworld2 or its
@@ -140,7 +154,9 @@ RUN "${CONDA_DIR}/bin/conda" run -n hyworld2 python -c \
         "import os, torch, diffusers, transformers; __import__('recast') if os.environ.get('INSTALL_WORLDGEN_EXTRAS', '1') == '1' else None; import hyworld2.worldrecon.pipeline; print('hyworld2 build check ok', torch.__version__, diffusers.__version__, transformers.__version__)" \
     && cd hyworld2/panogen \
     && "${CONDA_DIR}/bin/conda" run -n hyworld2-pano python -c \
-        "import torch, pipeline, pipeline_with_qwen_image; print('hyworld2-pano build check ok', torch.__version__)"
+        "import torch, pipeline, pipeline_with_qwen_image; print('hyworld2-pano build check ok', torch.__version__)" \
+    && "${CONDA_DIR}/bin/conda" run -n flux2 python -c \
+        "import torch; from diffusers import Flux2KleinPipeline; print('flux2 build check ok', torch.__version__, Flux2KleinPipeline.__name__)"
 
 # HF cache MUST point at the pre-downloaded weights under /models/.cache (set above).
 # Do NOT override HF_HOME to /cache/huggingface — that dir is empty and breaks
@@ -179,5 +195,5 @@ RUN "${CONDA_DIR}/bin/conda" run -n hyworld2 python -m pip install \
 # through the lightweight transformers OpenAI-compatible shim in hyworld2-pano.
 
 WORKDIR ${HYWORLD_ROOT}
-USER 1000:1000
+# USER 1000:1000
 CMD ["/bin/bash"]

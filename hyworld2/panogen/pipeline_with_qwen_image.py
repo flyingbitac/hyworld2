@@ -146,6 +146,11 @@ class HunyuanPanoPipeline:
         """
         if load_strategy not in {"cuda", "balanced", "cpu-offload", "sequential-offload"}:
             raise ValueError(f"Unsupported load_strategy: {load_strategy!r}")
+        if load_strategy == "balanced":
+            raise ValueError(
+                "`--load-strategy balanced` is disabled for HY-Pano. "
+                "Use `--load-strategy sequential-offload` instead."
+            )
 
         print(f"[Init] Loading base model from {pretrained_model_name_or_path} ...")
         if load_strategy == "balanced":
