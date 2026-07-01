@@ -9,6 +9,37 @@
 
 论文把 HY-World 2.0 表述为支持 `text prompts`、`single-view images`、`multi-view images` 和 `videos` 等输入，并说明 HY-Pano 2.0 用于从文本或单视图图像生成全景图。本仓库当前开源的 `hyworld2/panogen` CLI/API 示例仍然是图像条件入口：`pipeline.py` 和 `pipeline_with_qwen_image.py` 都要求传入 `--image`，再用 `--prompt` 控制风格和内容。因此，本地从“纯文本 prompt”开始时，推荐先用 `flux2` 环境生成一张条件图，再把这张图交给 HY-Pano 生成 360 度全景图。
 
+## 模型清单与下载链接
+
+完整 prompt -> 3DGS 流程会用到下面这些模型。`/models/...` 是容器内路径，对应宿主机默认 `/data/hyworld/models/...`。本地运行默认只使用这些显式目录，不依赖 Hugging Face cache 结构。
+
+可以用 `docker.py download` 通过 ModelScope CLI 下载整套模型，目录结构会按下面表格和本地 `/data/hyworld/models` 对齐：
+
+```bash
+conda activate torch
+python docker.py download --path /data/hyworld/models
+```
+
+该命令会先调用 `modelscope download --model <model-id> --local_dir <target-dir>`；如果 ModelScope 没有对应 repo，会自动 fallback 到 `hf download <repo-id> --local-dir <target-dir>`，并设置 `HF_ENDPOINT=https://hf-mirror.com`。先检查命令列表可用 `--dry-run`。如果不激活 conda 环境，也可以直接用装了 ModelScope/Hugging Face Hub 的解释器运行，例如 `/home/zxh/miniconda3/envs/torch/bin/python docker.py download --path /data/hyworld/models`。
+
+| 模型 | 用途 | 容器内默认位置 / repo id | 大小 | ModelScope | Hugging Face |
+|------|------|--------------------------|------|------------|--------------|
+| FLUX.2 Klein 4B | 文本生成条件图，`--flux-model 4b` | `/models/FLUX.2-klein-4B` | 23G | [black-forest-labs/FLUX.2-klein-4B](https://www.modelscope.cn/models/black-forest-labs/FLUX.2-klein-4B) | [black-forest-labs/FLUX.2-klein-4B](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B) |
+| FLUX.2 Klein 9B | 文本生成条件图，`--flux-model 9b`；也是 `--panorama-backend flux-lora` 的 base model | `/models/FLUX.2-klein-9B` | 50G | [black-forest-labs/FLUX.2-klein-9B](https://www.modelscope.cn/models/black-forest-labs/FLUX.2-klein-9B) | [black-forest-labs/FLUX.2-klein-9B](https://huggingface.co/black-forest-labs/FLUX.2-klein-9B) |
+| FLUX.2 Klein 9B 360 Panorama LoRA | `--panorama-backend flux-lora` 直接从 prompt 生成 2:1 全景图 | `/models/flux-2-klein-9b-360-panorama-lora` | 约 0.4G | 无；`download` 会 fallback 到 Hugging Face | [crafiq/flux-2-klein-9b-360-panorama-lora](https://huggingface.co/crafiq/flux-2-klein-9b-360-panorama-lora) |
+| Qwen-Image-Edit-2509 | HY-Pano Qwen backend base model | `/models/Qwen/Qwen-Image-Edit-2509` | 54G | [Qwen/Qwen-Image-Edit-2509](https://www.modelscope.cn/models/Qwen/Qwen-Image-Edit-2509) | [Qwen/Qwen-Image-Edit-2509](https://huggingface.co/Qwen/Qwen-Image-Edit-2509) |
+| HY-World 2.0 | HY-Pano-Qwen LoRA 和 WorldMirror 权重；`download` 默认跳过 80B full HY-Pano | `/models/HY-World-2.0`，只需 `HY-Pano-2.0/pytorch_lora_weights.safetensors` 和 `HY-WorldMirror-2.0/` | 约 5.6G | [Tencent-Hunyuan/HY-World-2.0](https://www.modelscope.cn/models/Tencent-Hunyuan/HY-World-2.0/files) | [tencent/HY-World-2.0](https://huggingface.co/tencent/HY-World-2.0) |
+| Qwen3-VL-8B-Instruct | WorldNav / Stage1-2 的 OpenAI-compatible VLM shim | `/models/Qwen/Qwen3-VL-8B-Instruct` | 17G | [Qwen/Qwen3-VL-8B-Instruct](https://www.modelscope.cn/models/Qwen/Qwen3-VL-8B-Instruct) | [Qwen/Qwen3-VL-8B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct) |
+| SAM3 | Stage1 目标分割、Stage3/WorldMirror sky/semantic mask | `/models/sam3`，由 `SAM3_REPO_ID` 指定 | 6.5G | [facebook/sam3](https://www.modelscope.cn/models/facebook/sam3) | [facebook/sam3](https://huggingface.co/facebook/sam3) |
+| WorldStereo | Stage3 WorldStereo adapter 权重 | `/models/WorldStereo`，包含 `worldstereo-camera/`、`worldstereo-memory/`、`worldstereo-memory-dmd/` | 64G | [hanshanxue/WorldStereo](https://www.modelscope.cn/models/hanshanxue/WorldStereo) | [hanshanxue/WorldStereo](https://huggingface.co/hanshanxue/WorldStereo) |
+| Wan2.1 I2V 14B Diffusers | WorldStereo base video model；由 `WORLDSTEREO_BASE_MODEL` 指定 | `/models/Wan2.1-I2V-14B-480P-Diffusers` | 约 32G | [Wan-AI/Wan2.1-I2V-14B-480P-Diffusers](https://www.modelscope.cn/models/Wan-AI/Wan2.1-I2V-14B-480P-Diffusers) | [Wan-AI/Wan2.1-I2V-14B-480P-Diffusers](https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P-Diffusers) |
+| MoGe v2 ViT-L normal | Stage1 深度/法线、Stage3/4 几何和法线估计 | `/models/moge-2-vitl-normal`，由 `MOGE_MODEL` 指定 | 约 1.3G | [Ruicheng/moge-2-vitl-normal](https://www.modelscope.cn/models/Ruicheng/moge-2-vitl-normal) | [Ruicheng/moge-2-vitl-normal](https://huggingface.co/Ruicheng/moge-2-vitl-normal) |
+| ZIM Anything ViT-L | Stage1 mask refinement | `/models/zim-anything-vitl`，使用 `zim_vit_l_2092/` 子目录，由 `ZIM_MODEL` 指定 | 约 1.2G | [naver-iv/zim-anything-vitl](https://www.modelscope.cn/models/naver-iv/zim-anything-vitl) | [naver-iv/zim-anything-vitl](https://huggingface.co/naver-iv/zim-anything-vitl) |
+| GroundingDINO tiny | Stage1 grounding / object mask 辅助 | `/models/grounding-dino-tiny`，由 `GROUNDING_DINO_MODEL` 指定 | 约 1.3G | [IDEA-Research/grounding-dino-tiny](https://www.modelscope.cn/models/IDEA-Research/grounding-dino-tiny) | [IDEA-Research/grounding-dino-tiny](https://huggingface.co/IDEA-Research/grounding-dino-tiny) |
+| DINOv2 base | WorldMirror memory-bank camera selector | `/models/dinov2-base`，由 `CAMERA_SELECTOR_MODEL` 指定 | 约 0.7G | [facebook/dinov2-base](https://www.modelscope.cn/models/facebook/dinov2-base) | [facebook/dinov2-base](https://huggingface.co/facebook/dinov2-base) |
+
+## Docker 运行步骤
+
 ### 1. 在宿主机启动容器
 
 ```bash
@@ -35,7 +66,34 @@ python docker.py isaac exec nvidia-smi
 python docker.py isaac stop
 ```
 
-`docker.py` 默认把仓库挂载到容器内 `/workspace/hyworld2`，把模型目录 `/data/hyworld/models` 挂载到 `/models`，并挂载 Hugging Face、Torch 和 Matplotlib 缓存目录。容器内常用 conda 环境如下：
+如果命令里省略 `base` / `isaac`，`docker.py` 默认使用 `base` 变体，例如 `python docker.py run ...` 等价于 `python docker.py base run ...`。
+
+也可以直接从宿主机启动完整 prompt -> 条件图 -> 全景图 -> 3DGS 流程。命令会自动进入对应容器执行各阶段，阶段开始时在终端打印 `[RUN] ...`，并透传容器内命令输出：
+
+```bash
+python docker.py base run \
+  --prompt "a realistic sunny mountain village with stone paths, trees, and distant snow peaks" \
+  --runname my_prompt_scene \
+  --device 0,1
+```
+
+默认 `--panorama-backend hypano` 会沿用 FLUX 条件图 + HY-Pano 的路径。若要用 FLUX.2 Klein 9B panorama LoRA 直接生成 `$SCENE/panorama.png`，跳过条件图和 HY-Pano：
+
+```bash
+python docker.py run \
+  --panorama-backend flux-lora \
+  --prompt "a realistic sunny mountain village with stone paths, trees, and distant snow peaks" \
+  --runname my_prompt_scene \
+  --device 0,1
+```
+
+`run` 不会自动 build 镜像；如果镜像不存在会直接报错。若对应容器已经存在，命令会启动/复用该容器并在退出时保留；若同名容器完全不存在，命令会临时启动一个容器并在流程结束或失败后自动关闭，且会把 `/models` 挂载为可写以便使用本地模型目录。`--device 0` 会用单卡跑完整流程；`--device 0,1` 会用第 0 张卡跑 FLUX/HY-Pano/Stage1/Stage5，用第 1 张卡跑 VLM shim，Stage3/4 使用两张卡。恢复已有场景时加 `--skip-existing`。
+
+两个 panorama backend 默认都用 `1952x960` 做 panorama 推理；HY-Pano 会默认融合并裁掉 32px 接缝，FLUX LoRA 路径也会用 `--flux-pano-blend-width 32` 做同样处理，因此最终 `$SCENE/panorama.png` 默认保存为 `1920x960`。可分别用 `--pano-height/--pano-width`、`--flux-pano-height/--flux-pano-width` 和 `--flux-pano-blend-width` 覆盖。
+
+`docker.py` 默认把仓库挂载到容器内 `/workspace/hyworld2`，把模型目录 `/data/hyworld/models` 挂载到 `/models`，并挂载 Hugging Face、Torch 和 Matplotlib 缓存目录。
+
+容器内常用 conda 环境如下：
 
 | 环境 | 用途 |
 |------|------|
@@ -126,7 +184,7 @@ CUDA_VISIBLE_DEVICES=0 /opt/miniconda3/bin/conda run --no-capture-output -n hywo
 |------|------|
 | `--image` | 必填；当前开源 CLI 用它作为全景图生成的条件图。 |
 | `--prompt` | 控制场景语义、风格和补全方向。 |
-| `--height` / `--width` | 全景图分辨率，默认示例为 960x1952。 |
+| `--height` / `--width` | 全景图推理分辨率，默认示例为 960x1952；HY-Pano 默认再融合并裁掉 32px 接缝，最终保存为 960x1920。 |
 | `--num-inference-steps` | 采样步数；先用 `4` 验证输出非空，再逐步加到 `8/16/24`。不要一开始直接 40。 |
 | `--load-strategy` | 推荐 `sequential-offload`。`balanced` 已禁用；`cpu-offload` 曾在 32GB 卡上 OOM。 |
 

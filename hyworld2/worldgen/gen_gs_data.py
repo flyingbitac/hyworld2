@@ -17,6 +17,7 @@ from moge.model.v2 import MoGeModel
 from tqdm import tqdm
 
 from src.general_utils import rank0_log, Timer, load_video, save_16bit_png_depth
+from src.model_paths import resolve_moge_checkpoint
 from src.panorama_utils import split_panorama_image, split_panorama_depth, rotate_around_z_axis
 
 timer = Timer()
@@ -95,7 +96,9 @@ if __name__ == '__main__':
 
     fov_x, fov_y = 120, 90
 
-    moge_model = MoGeModel.from_pretrained("Ruicheng/moge-2-vitl-normal").to(device)
+    moge_model = MoGeModel.from_pretrained(
+        resolve_moge_checkpoint(os.environ.get("MOGE_MODEL", "/models/moge-2-vitl-normal"))
+    ).to(device)
     moge_model.eval()
 
     if args.scene_name:

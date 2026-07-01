@@ -24,6 +24,7 @@ from transformers import Sam3Processor, Sam3Model
 
 from src.camera_utils import add_scene_cam, get_c2w, CAM_COLORS, interpolate_poses, compute_lookat_xy_angle
 from src.general_utils import save_16bit_png_depth, set_seed, adjust_image_size, Timer, rank0_log
+from src.model_paths import resolve_moge_checkpoint
 from src.navi_utils import (
     find_robust_center,
     project_center_to_3d,
@@ -77,15 +78,25 @@ HF_CACHE_DIR = os.environ.get(
     "HUGGINGFACE_HUB_CACHE",
     os.path.join(os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface")), "hub"),
 )
-ZIM_REPO_ID = "naver-iv/zim-anything-vitl"
+ZIM_REPO_ID = os.environ.get("ZIM_MODEL", "/models/zim-anything-vitl")
 ZIM_SUBFOLDER = "zim_vit_l_2092"
-GD_REPO_ID = "IDEA-Research/grounding-dino-tiny"
+GD_REPO_ID = os.environ.get("GROUNDING_DINO_MODEL", "/models/grounding-dino-tiny")
 SAM3_REPO_ID = os.environ.get("SAM3_REPO_ID", "facebook/sam3")
-MOGE_ID = "Ruicheng/moge-2-vitl-normal"
+MOGE_ID = os.environ.get("MOGE_MODEL", "/models/moge-2-vitl-normal")
 
 
 def resolve_hf_checkpoint(repo_id, allow_patterns=None, subfolder=None, required_files=None):
-    """Download a Hugging Face model to the local cache and return its usable path."""
+    """Return a local checkpoint path, falling back to Hugging Face cache download."""
+    if os.path.isabs(repo_id) and not os.path.isdir(repo_id):
+        raise FileNotFoundError(f"Local model path does not exist: {repo_id}")
+    if os.path.isdir(repo_id):
+        checkpoint_dir = os.path.join(repo_id, subfolder) if subfolder else repo_id
+        required_files = required_files or []
+        missing_files = [filename for filename in required_files if not os.path.exists(os.path.join(checkpoint_dir, filename))]
+        if missing_files:
+            raise FileNotFoundError(f"Checkpoint '{repo_id}' is missing files in {checkpoint_dir}: {missing_files}")
+        return checkpoint_dir
+
     from huggingface_hub import snapshot_download
 
     repo_root = snapshot_download(
@@ -203,7 +214,7 @@ if __name__ == '__main__':
     zim_predictor = build_zim_model("vit_l", resolve_zim_checkpoint(), device=device)
     gd_processor, gd_model = build_gd_model(resolve_gd_checkpoint(), device=device)
 
-    depth_model = MoGeModel.from_pretrained(MOGE_ID).to(device).eval()
+    depth_model = MoGeModel.from_pretrained(resolve_moge_checkpoint(MOGE_ID)).to(device).eval()
 
     # VLM & SAM3
     client = OpenAI(api_key="EMPTY", base_url=f"http://{LLM_ADDR}:{LLM_PORT}/v1")

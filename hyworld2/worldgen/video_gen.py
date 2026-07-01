@@ -17,6 +17,7 @@ from transformers import Sam3VideoModel, Sam3VideoProcessor
 from models.worldstereo_wrapper import WorldStereo
 from src.data_utils import sort_trajs, load_mutli_traj_dataset
 from src.general_utils import set_seed, load_video, rank0_log, Timer
+from src.model_paths import resolve_moge_checkpoint
 from src.retrieval_wm import PanoramaMemoryBank
 from src.sp_utils.parallel_states import initialize_parallel_state
 
@@ -24,7 +25,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 timer = Timer()
 
 SAM3_REPO_ID = os.environ.get("SAM3_REPO_ID", "facebook/sam3")
-MOGE_ID = "Ruicheng/moge-2-vitl-normal"
+MOGE_ID = os.environ.get("MOGE_MODEL", "/models/moge-2-vitl-normal")
 
 if __name__ == '__main__':
     # == parse configs ==
@@ -76,7 +77,7 @@ if __name__ == '__main__':
 
     # == setup models ==
     # Note: FP8 quantization is done INSIDE init_wan_from_cfg, BEFORE FSDP sharding
-    moge_model = MoGeModel.from_pretrained(MOGE_ID).to(device)
+    moge_model = MoGeModel.from_pretrained(resolve_moge_checkpoint(MOGE_ID)).to(device)
     sam3_model = Sam3VideoModel.from_pretrained(SAM3_REPO_ID).to(device, dtype=torch.bfloat16)
     sam3_processor = Sam3VideoProcessor.from_pretrained(SAM3_REPO_ID)
     rank0_log("Model init over...")

@@ -34,6 +34,7 @@ from .general_utils import (
     sample_align_nframe,
     colorize_depth
 )
+from .model_paths import resolve_local_model_path, resolve_moge_checkpoint
 from .pointcloud import depth2pcd
 
 
@@ -422,7 +423,7 @@ class CameraSelector:
         """Load the pretrained model."""
         if extractor == 'dinov2':
             from transformers import AutoImageProcessor, AutoModel
-            model_path = os.environ.get("CAMERA_SELECTOR_MODEL", "facebook/dinov2-base")
+            model_path = resolve_local_model_path(os.environ.get("CAMERA_SELECTOR_MODEL", "/models/dinov2-base"))
             self.processor = AutoImageProcessor.from_pretrained(model_path, use_fast=True)
             self.model = AutoModel.from_pretrained(model_path).to(self.device)
         else:
@@ -815,7 +816,9 @@ class PanoramaMemoryBank:
 
         rank0_log(f"Initializing Moge Model...")
         if moge_model is None:
-            self.moge_model = MoGeModel.from_pretrained("Ruicheng/moge-2-vitl-normal").to(device)
+            self.moge_model = MoGeModel.from_pretrained(
+                resolve_moge_checkpoint(os.environ.get("MOGE_MODEL", "/models/moge-2-vitl-normal"))
+            ).to(device)
         else:
             self.moge_model = moge_model
         self.moge_model.eval()

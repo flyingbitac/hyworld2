@@ -158,10 +158,10 @@ RUN "${CONDA_DIR}/bin/conda" run -n hyworld2 python -c \
     && "${CONDA_DIR}/bin/conda" run -n flux2 python -c \
         "import torch; from diffusers import Flux2KleinPipeline; print('flux2 build check ok', torch.__version__, Flux2KleinPipeline.__name__)"
 
-# HF cache MUST point at the pre-downloaded weights under /models/.cache (set above).
-# Do NOT override HF_HOME to /cache/huggingface — that dir is empty and breaks
-# resolution of Wan/MoGe/SAM3/WorldStereo weights. /cache stays for writable
-# runtime caches (torch hub, matplotlib) which are bind-mounted to the host.
+# Keep HF cache under /models for libraries that still need metadata, while the
+# pipeline's explicit model env vars below point at real local directories.
+# /cache stays for writable runtime caches (torch hub, matplotlib) which are
+# bind-mounted to the host.
 ENV TORCH_HOME=/cache/torch
 ENV MPLCONFIGDIR=/cache/matplotlib
 ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
@@ -173,8 +173,12 @@ ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 ENV HF_ENDPOINT=https://hf-mirror.com
 ENV SAM3_REPO_ID=/models/sam3
 ENV WORLDSTEREO_REPO=/models/WorldStereo
+ENV WORLDSTEREO_BASE_MODEL=/models/Wan2.1-I2V-14B-480P-Diffusers
 ENV WORLDMIRROR_MODEL=/models/HY-World-2.0
-ENV CAMERA_SELECTOR_MODEL=facebook/dinov2-base
+ENV MOGE_MODEL=/models/moge-2-vitl-normal
+ENV ZIM_MODEL=/models/zim-anything-vitl
+ENV GROUNDING_DINO_MODEL=/models/grounding-dino-tiny
+ENV CAMERA_SELECTOR_MODEL=/models/dinov2-base
 ENV WS_TEXT_DTYPE=bf16
 ENV WS_AUX_OFFLOAD=1
 ENV WORLDMIRROR_NPROC_PER_NODE=1

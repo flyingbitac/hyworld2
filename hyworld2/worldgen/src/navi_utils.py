@@ -839,6 +839,38 @@ class NavMeshGraph:
         return [start_pt] + list(points[first_valid_idx:])
 
 
+def _as_numpy_array(value):
+    if isinstance(value, torch.Tensor):
+        return value.detach().cpu().numpy()
+    return np.asarray(value)
+
+
+def _align_mask_to_depth(mask_np, depth_map):
+    depth_np = _as_numpy_array(depth_map)
+    mask_bool = _as_numpy_array(mask_np) > 0
+
+    if mask_bool.ndim > 2:
+        mask_bool = np.squeeze(mask_bool)
+    if mask_bool.ndim != 2:
+        raise ValueError(f"Expected a 2D mask, got shape {mask_bool.shape}")
+
+    H, W = depth_np.shape
+    mask_h, mask_w = mask_bool.shape
+    if mask_h <= 0 or mask_w <= 0:
+        return mask_bool, depth_np, 1.0, 1.0
+
+    scale_x = W / mask_w
+    scale_y = H / mask_h
+    if (mask_h, mask_w) != (H, W):
+        mask_bool = cv2.resize(
+            mask_bool.astype(np.uint8),
+            (W, H),
+            interpolation=cv2.INTER_NEAREST,
+        ).astype(bool)
+
+    return mask_bool, depth_np, scale_x, scale_y
+
+
 def get_max_size_center(mask_np, depth_map, rays, std_threshold=5.):
     """
     Compute the maximum cross-section size and center point of an object in 3D space.
@@ -848,11 +880,8 @@ def get_max_size_center(mask_np, depth_map, rays, std_threshold=5.):
     """
 
     
-    if isinstance(mask_np, torch.Tensor):
-        mask_np = mask_np.detach().cpu().numpy()
-
-    if isinstance(depth_map, torch.Tensor):
-        depth_map = depth_map.detach().cpu().numpy()
+    mask_np, depth_map, _, _ = _align_mask_to_depth(mask_np, depth_map)
+    rays = _as_numpy_array(rays)
 
     H, W = depth_map.shape
 
@@ -889,10 +918,7 @@ def get_max_size_center(mask_np, depth_map, rays, std_threshold=5.):
         xi = int(np.clip(x, 0, W - 1))
         yi = int(np.clip(y, 0, H - 1))
 
-        if isinstance(rays, torch.Tensor):
-            ray = rays[yi, xi].detach().cpu().numpy()
-        else:
-            ray = rays[yi, xi]
+        ray = rays[yi, xi]
 
         return ray * z_val
 
@@ -936,20 +962,14 @@ def project_center_to_3d(center_2d, depth_map, rays, mask, std_threshold=0.5):
     cx, cy = center_2d
 
     
-    if isinstance(depth_map, torch.Tensor):
-        depth_map = depth_map.detach().cpu().numpy()
-    if isinstance(rays, torch.Tensor):
-        rays = rays.detach().cpu().numpy()
-    if isinstance(mask, torch.Tensor):
-        mask = mask.detach().cpu().numpy()
+    mask_bool, depth_map, scale_x, scale_y = _align_mask_to_depth(mask, depth_map)
+    rays = _as_numpy_array(rays)
 
     H, W = depth_map.shape
+    cx = cx * scale_x
+    cy = cy * scale_y
     cx_int = int(np.clip(cx, 0, W - 1))
     cy_int = int(np.clip(cy, 0, H - 1))
-
-    
-    
-    mask_bool = (mask > 0)
 
     
     masked_depths = depth_map[mask_bool]
@@ -999,9 +1019,7 @@ def find_robust_center(mask_np, depth_map):
     3. Compute the spatial centroid of the remaining pixels.
     4. Snap the centroid to the nearest valid pixel so the returned point is inside the mask and has valid depth.
     """
-    if isinstance(depth_map, torch.Tensor):
-        depth_map = depth_map.cpu().numpy()
-    depth_map = np.array(depth_map)
+    mask_np, depth_map, scale_x, scale_y = _align_mask_to_depth(mask_np, depth_map)
 
     
     y_indices, x_indices = np.where(mask_np > 0)
@@ -1051,8 +1069,8 @@ def find_robust_center(mask_np, depth_map):
     dist_sq = (final_x - centroid_x) ** 2 + (final_y - centroid_y) ** 2
     best_idx = np.argmin(dist_sq)
 
-    center_x = float(final_x[best_idx])
-    center_y = float(final_y[best_idx])
+    center_x = float(final_x[best_idx] / scale_x)
+    center_y = float(final_y[best_idx] / scale_y)
 
     return [center_x, center_y]
 
@@ -3025,12 +3043,14 @@ def get_bearing_and_direction(center_x, image_width):
 
 
 def project_point_to_3d(center_2d, depth_map, rays):
+    depth_map = _as_numpy_array(depth_map)
+    rays = _as_numpy_array(rays)
     cx, cy = center_2d
     H, W = depth_map.shape
     cx_int = int(np.clip(cx, 0, W - 1))
     cy_int = int(np.clip(cy, 0, H - 1))
-    d = depth_map[cy_int, cx_int].item()
-    ray = rays[cy_int, cx_int].cpu().numpy()
+    d = float(depth_map[cy_int, cx_int])
+    ray = rays[cy_int, cx_int]
     point_3d = ray * d
     return point_3d.tolist(), d
 
@@ -3062,6 +3082,9 @@ def create_and_save_combined_pcd(original_pcd, seg_results, output_path):
 
 
 def get_mask_edge_points_3d(mask_np, depth_map, rays, sample_ratio=0.05, min_samples=5):
+    mask_np, depth_map, scale_x, scale_y = _align_mask_to_depth(mask_np, depth_map)
+    rays = _as_numpy_array(rays)
+
     y_indices, x_indices = np.where(mask_np > 0)
     if len(x_indices) == 0:
         return (None, None), (None, None)
@@ -3087,7 +3110,7 @@ def get_mask_edge_points_3d(mask_np, depth_map, rays, sample_ratio=0.05, min_sam
             pt3d, _ = project_point_to_3d([x, y], depth_map, rays)
             if pt3d is not None and np.all(np.isfinite(pt3d)) and np.linalg.norm(pt3d) > 0.1:
                 points_3d.append(pt3d)
-                points_2d.append([x, y])
+                points_2d.append([x / scale_x, y / scale_y])
 
         if not points_3d:
             return None, None

@@ -165,6 +165,7 @@ class WorldStereo:
             )
 
         cfg = OmegaConf.create(cls._load_hf_config(json_cfg_path))
+        cfg.base_model = os.environ.get("WORLDSTEREO_BASE_MODEL", "/models/Wan2.1-I2V-14B-480P-Diffusers")
         # Prefer a locally-cached snapshot for base_model so loading never hits the
         # network (huggingface.co is often unreachable / gated here). Falls back to
         # the repo id if no cache entry exists.
