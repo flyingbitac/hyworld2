@@ -93,6 +93,20 @@ warnings.filterwarnings("ignore", category=UserWarning, module="diffusers")
 # ──────────────────────────────────────────────────────────────────────
 
 SUPPORTED_MODEL_TYPES = ("worldstereo-camera", "worldstereo-memory", "worldstereo-memory-dmd")
+SUPPORTED_OFFLOAD_MODES = ("none", "model", "sequential", "block")
+
+
+def _normalize_offload_mode(offload_mode: str | None) -> str:
+    mode = offload_mode or os.environ.get("WS_STAGE3_OFFLOAD_MODE", "none")
+    aliases = {
+        "model-offload": "model",
+        "sequential-offload": "sequential",
+        "block-offload": "block",
+    }
+    mode = aliases.get(mode, mode)
+    if mode not in SUPPORTED_OFFLOAD_MODES:
+        raise ValueError(f"Unsupported WorldStereo offload mode {mode!r}. Expected one of {SUPPORTED_OFFLOAD_MODES}.")
+    return mode
 
 
 def _get_half_dtype() -> torch.dtype:
@@ -127,6 +141,7 @@ class WorldStereo:
         fsdp: bool = False,
         device_mesh=None,
         device: torch.device | None = None,
+        offload_mode: str | None = None,
     ) -> "WorldStereo":
         """
         Build a WorldStereo instance from Hugging Face format
@@ -140,7 +155,11 @@ class WorldStereo:
             fsdp: Wrap models with PyTorch FSDP.  Requires ``device_mesh``.
             device_mesh: ``DeviceMesh`` with dims ``("rep", "shard")``.
             device: Target CUDA device.
+            offload_mode: Non-FSDP low-VRAM strategy: none, model, sequential, or block.
         """
+        offload_mode = _normalize_offload_mode(offload_mode)
+        if fsdp and offload_mode != "none":
+            raise ValueError("WorldStereo offload modes cannot be combined with FSDP.")
         if os.path.isdir(repo_id):
             json_cfg_path = os.path.join(repo_id, subfolder, "config.json")
             safetensors_path = os.path.join(repo_id, subfolder, "model.safetensors")
@@ -181,6 +200,8 @@ class WorldStereo:
                 f"Unsupported model_type {model_type!r}. "
                 f"Expected one of {SUPPORTED_MODEL_TYPES}."
             )
+        if offload_mode == "block" and model_type == "worldstereo-camera":
+            raise ValueError("WorldStereo block offload is only implemented for memory/ref models.")
 
         transformer = cls._load_transformer(
             cfg,
@@ -190,10 +211,16 @@ class WorldStereo:
             fsdp=fsdp,
             device_mesh=device_mesh,
             device=device,
+            offload_mode=offload_mode,
         )
 
         text_encoder, image_clip, vae = cls._load_aux(
-            cfg, device=device, device_mesh=device_mesh, fsdp=fsdp, local_files_only=local_files_only
+            cfg,
+            device=device,
+            device_mesh=device_mesh,
+            fsdp=fsdp,
+            offload_mode=offload_mode,
+            local_files_only=local_files_only,
         )
         image_processor = CLIPImageProcessor.from_pretrained(
             cfg.base_model, do_rescale=False, subfolder="image_processor", local_files_only=local_files_only
@@ -213,12 +240,23 @@ class WorldStereo:
             local_files_only=local_files_only,
         )
 
-        if os.environ.get("WS_AUX_OFFLOAD", "0") == "1" and not fsdp:
+        pipeline._ws_offload_mode = offload_mode
+        if offload_mode == "model":
+            rank0_log("Enabling diffusers model CPU offload for WorldStereo.")
+            pipeline.enable_model_cpu_offload(device=device)
+        elif offload_mode == "sequential":
+            rank0_log("Enabling diffusers sequential CPU offload for WorldStereo.")
+            pipeline.enable_sequential_cpu_offload(device=device)
+        elif offload_mode == "block":
+            rank0_log("Enabling WorldStereo transformer block CPU offload.")
+            transformer.enable_block_cpu_offload(device)
+            cls._install_encode_aware_offload(pipeline, device)
+        elif os.environ.get("WS_AUX_OFFLOAD", "0") == "1" and not fsdp:
             # Non-FSDP lazy offload only. Under FSDP, _load_aux passes CPUOffloadPolicy
             # to fully_shard (per-op on/offload), so no manual .to() wrap is needed.
             cls._install_encode_aware_offload(pipeline, device)
 
-        rank0_log(f"WorldStereo ({model_type}) ready.")
+        rank0_log(f"WorldStereo ({model_type}) ready. offload_mode={offload_mode}")
         return cls(pipeline=pipeline, cfg=cfg)
 
     @staticmethod
@@ -301,6 +339,7 @@ class WorldStereo:
         fsdp: bool,
         device_mesh,
         device,
+        offload_mode: str,
     ):
 
         half_dtype = _get_half_dtype()
@@ -388,6 +427,9 @@ class WorldStereo:
                 fully_shard(layer, **fsdp_kwargs)
             fully_shard(transformer, **fsdp_kwargs)
             rank0_log("FSDP wrapping done for transformer.")
+        elif offload_mode in ("model", "sequential", "block"):
+            transformer = transformer.to(dtype=half_dtype, device="cpu")
+            rank0_log(f"Keeping transformer on CPU for offload mode {offload_mode}.")
         else:
             transformer = transformer.to(device=device)
 
@@ -396,7 +438,7 @@ class WorldStereo:
         return transformer.eval()
 
     @staticmethod
-    def _load_aux(cfg, *, device, device_mesh, fsdp: bool, local_files_only: bool = False):
+    def _load_aux(cfg, *, device, device_mesh, fsdp: bool, offload_mode: str, local_files_only: bool = False):
         import transformers as _tr
         from transformers.modeling_outputs import BaseModelOutput, BaseModelOutputWithPooling
 
@@ -410,7 +452,8 @@ class WorldStereo:
         _text_dtype_name = os.environ.get("WS_TEXT_DTYPE", "fp32")
         text_dt = torch.bfloat16 if _text_dtype_name == "bf16" else torch.float32
         aux_offload = os.environ.get("WS_AUX_OFFLOAD", "0") == "1"
-        rank0_log(f"aux encoders: dtype={_text_dtype_name} offload={aux_offload}")
+        keep_on_cpu = offload_mode in ("model", "sequential", "block")
+        rank0_log(f"aux encoders: dtype={_text_dtype_name} offload={aux_offload} keep_on_cpu={keep_on_cpu}")
 
         # ---- text encoder ----
         rank0_log("Loading TextEncoder (UMT5)…")
@@ -422,7 +465,7 @@ class WorldStereo:
             text_encoder.encoder.embed_tokens = text_encoder.shared
         # torch.compile + FSDP CPUOffload is unstable (illegal-memory-access in the
         # forward); only compile when the encoder will stay resident on GPU.
-        if not aux_offload:
+        if not aux_offload and not keep_on_cpu:
             text_encoder = torch.compile(text_encoder)
 
         # ---- image encoder ----
@@ -464,7 +507,8 @@ class WorldStereo:
         vae = AutoencoderKLWan.from_pretrained(
             cfg.base_model, subfolder="vae", torch_dtype=vae_dtype, local_files_only=local_files_only
         ).eval()
-        vae = torch.compile(vae)
+        if not keep_on_cpu:
+            vae = torch.compile(vae)
 
         if fsdp:
             # Compute the encoders in their load dtype (bf16 when WS_TEXT_DTYPE=bf16).
@@ -496,12 +540,18 @@ class WorldStereo:
             gc.collect()
             torch.cuda.empty_cache()
         else:
-            text_encoder = text_encoder.to(device=device)
-            image_clip = image_clip.to(device=device)
+            if keep_on_cpu:
+                rank0_log(f"Keeping text/image encoders on CPU for offload mode {offload_mode}.")
+            else:
+                text_encoder = text_encoder.to(device=device)
+                image_clip = image_clip.to(device=device)
 
-        vae = vae.to(device=device)
+        if keep_on_cpu:
+            rank0_log(f"Keeping VAE on CPU for offload mode {offload_mode}.")
+        else:
+            vae = vae.to(device=device)
 
-        if aux_offload and not fsdp:
+        if aux_offload and not fsdp and not keep_on_cpu:
             # Non-FSDP path: encoders are only needed once per generation. Move them
             # to CPU so they don't hold GPU during the denoise loop;
             # _install_encode_aware_offload lazily fetches them per-encode. Under FSDP,

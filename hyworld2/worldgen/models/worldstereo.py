@@ -1,4 +1,5 @@
 import copy
+import gc
 from typing import Any, Dict, Optional, Tuple, Union
 
 import einops
@@ -244,6 +245,116 @@ class _WorldStereoCommonMixin:
             "image_width": image_width,
             "image_height": image_height,
         }
+
+    def enable_block_cpu_offload(self, device):
+        self._ws_block_cpu_offload = True
+        self._ws_block_offload_device = torch.device(device)
+        self.to("cpu")
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        return self
+
+    def _using_block_cpu_offload(self) -> bool:
+        return bool(getattr(self, "_ws_block_cpu_offload", False))
+
+    def _block_cpu_offload_device(self) -> torch.device:
+        device = getattr(self, "_ws_block_offload_device", torch.device("cuda"))
+        return device if isinstance(device, torch.device) else torch.device(device)
+
+    @staticmethod
+    def _move_module_for_block_offload(module, device) -> None:
+        if module is not None:
+            module.to(device)
+
+    @staticmethod
+    def _clear_block_offload_cache() -> None:
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    def _move_root_tensor_attrs_for_block_offload(self, names, device) -> None:
+        for name in names:
+            value = getattr(self, name, None)
+            if isinstance(value, nn.Parameter):
+                value.data = value.data.to(device)
+            elif torch.is_tensor(value):
+                setattr(self, name, value.to(device))
+
+    def _move_core_modules_for_block_offload(self, device) -> None:
+        for name in ("patch_embedding", "rope", "condition_embedder", "norm_out", "proj_out"):
+            self._move_module_for_block_offload(getattr(self, name, None), device)
+        for name in ("camera_embedding", "ref_index_embedding", "controlnet_rope"):
+            self._move_module_for_block_offload(getattr(self, name, None), device)
+        if hasattr(self, "controlnet"):
+            for name in ("controlnet_patch_embedding", "controlnet_mask_embedding"):
+                self._move_module_for_block_offload(getattr(self.controlnet, name, None), device)
+        self._move_root_tensor_attrs_for_block_offload(("scale_shift_table",), device)
+
+    @staticmethod
+    def _move_tensor_tree_for_block_offload(value, device):
+        if torch.is_tensor(value):
+            return value.to(device)
+        if isinstance(value, tuple):
+            return tuple(_WorldStereoCommonMixin._move_tensor_tree_for_block_offload(v, device) for v in value)
+        if isinstance(value, list):
+            return [_WorldStereoCommonMixin._move_tensor_tree_for_block_offload(v, device) for v in value]
+        if isinstance(value, dict):
+            return {k: _WorldStereoCommonMixin._move_tensor_tree_for_block_offload(v, device) for k, v in value.items()}
+        return value
+
+    def _run_controlnet_block_cpu_offload(
+            self,
+            *,
+            controlnet_inputs,
+            controlnet_rotary_emb,
+            temb,
+            add_infos,
+            use_5b_last_temb: bool,
+    ):
+        if not hasattr(self, "controlnet"):
+            return []
+        if self.sp_size > 1:
+            raise RuntimeError("WorldStereo block CPU offload is only supported without sequence parallelism.")
+
+        device = self._block_cpu_offload_device()
+        controlnet = self.controlnet
+        add_infos = self._move_tensor_tree_for_block_offload(add_infos, device)
+        controlnet_inputs = controlnet_inputs.to(device)
+        controlnet_rotary_emb = self._move_tensor_tree_for_block_offload(controlnet_rotary_emb, device)
+        temb = temb.to(device)
+
+        controlnet.proj_in.to(device)
+        hidden_states = controlnet.proj_in(controlnet_inputs)
+        controlnet.proj_in.to("cpu")
+        del controlnet_inputs
+        self._clear_block_offload_cache()
+
+        controlnet_states = []
+        block_temb = temb[:, -1] if use_5b_last_temb and "5B" in self.controlnet_cfg.get("base_model", "") else temb
+        for i, block in enumerate(controlnet.controlnet_blocks):
+            block.to(device)
+            controlnet.proj_out[i].to(device)
+            with torch.autocast("cuda", dtype=self.dtype, enabled=True):
+                hidden_states = block(
+                    hidden_states=hidden_states,
+                    temb=block_temb,
+                    rotary_emb=controlnet_rotary_emb,
+                    extrinsics=add_infos["extrinsics"],
+                    intrinsics=add_infos["intrinsics"],
+                    patches_x=add_infos["patches_x"],
+                    patches_y=add_infos["patches_y"],
+                    image_width=add_infos["image_width"],
+                    image_height=add_infos["image_height"],
+                )
+                controlnet_states.append(controlnet.proj_out[i](hidden_states).to("cpu"))
+            controlnet.proj_out[i].to("cpu")
+            block.to("cpu")
+            self._clear_block_offload_cache()
+
+        del hidden_states
+        self._clear_block_offload_cache()
+        return controlnet_states
 
     def _prepare_controlnet_inputs(
             self,
@@ -629,6 +740,16 @@ class WorldStereoRefSModel(_WorldStereoCommonMixin, WanTransformer3DModel):
         :param render_mask: [b,1,f,h,w]
         :param camera_embedding: [b,6,f,h,w]
         """
+        block_offload = self._using_block_cpu_offload()
+        if block_offload:
+            if torch.is_grad_enabled():
+                raise RuntimeError("WorldStereo block CPU offload is inference-only.")
+            if self.sp_size > 1:
+                raise RuntimeError("WorldStereo block CPU offload is only supported without sequence parallelism.")
+            block_offload_device = self._block_cpu_offload_device()
+            self._move_core_modules_for_block_offload(block_offload_device)
+        else:
+            block_offload_device = None
         parallel_dims = get_parallel_state()
         attention_kwargs, lora_scale = self._prepare_lora_scale(attention_kwargs, use_rank0_warning=True)
 
@@ -718,14 +839,26 @@ class WorldStereoRefSModel(_WorldStereoCommonMixin, WanTransformer3DModel):
                 image_height=image_height,
             )
 
-            controlnet_states = self._run_controlnet(
-                controlnet_inputs=controlnet_inputs,
-                controlnet_rotary_emb=controlnet_rotary_emb,
-                temb=temb,
-                add_infos=add_infos,
-                parallel_dims=parallel_dims,
-                use_5b_last_temb=False,
-            )
+            if block_offload:
+                controlnet_states = self._run_controlnet_block_cpu_offload(
+                    controlnet_inputs=controlnet_inputs,
+                    controlnet_rotary_emb=controlnet_rotary_emb,
+                    temb=temb,
+                    add_infos=add_infos,
+                    use_5b_last_temb=False,
+                )
+            else:
+                controlnet_states = self._run_controlnet(
+                    controlnet_inputs=controlnet_inputs,
+                    controlnet_rotary_emb=controlnet_rotary_emb,
+                    temb=temb,
+                    add_infos=add_infos,
+                    parallel_dims=parallel_dims,
+                    use_5b_last_temb=False,
+                )
+            if block_offload:
+                del controlnet_inputs, controlnet_rotary_emb
+                self._clear_block_offload_cache()
             ### controlnet encoding over ###
         else:
             controlnet_states = []
@@ -748,6 +881,8 @@ class WorldStereoRefSModel(_WorldStereoCommonMixin, WanTransformer3DModel):
         # 4. Transformer blocks
         ref_states = reference_latent
         for i, block in enumerate(self.blocks):
+            if block_offload:
+                block.to(block_offload_device)
             if torch.is_grad_enabled() and self.gradient_checkpointing:
                 hidden_states, ref_states = self._gradient_checkpointing_func(
                     block, hidden_states,
@@ -760,7 +895,16 @@ class WorldStereoRefSModel(_WorldStereoCommonMixin, WanTransformer3DModel):
                                                   encoder_hidden_states, timestep_proj, rotary_emb, ref_rotary_emb, post_patch_num_frames, post_patch_height, post_patch_width, ref_index)
             # adding control features
             if i < len(controlnet_states):
-                hidden_states += controlnet_states[i]
+                controlnet_state = controlnet_states[i]
+                if block_offload:
+                    controlnet_state = controlnet_state.to(device=hidden_states.device, dtype=hidden_states.dtype)
+                    controlnet_states[i] = None
+                hidden_states += controlnet_state
+                if block_offload:
+                    del controlnet_state
+            if block_offload:
+                block.to("cpu")
+                self._clear_block_offload_cache()
 
         output = self._apply_output_projection(
             hidden_states=hidden_states,
@@ -775,6 +919,9 @@ class WorldStereoRefSModel(_WorldStereoCommonMixin, WanTransformer3DModel):
             p_w=p_w,
         )
         self._unscale_lora_if_needed(lora_scale)
+        if block_offload:
+            self._move_core_modules_for_block_offload("cpu")
+            self._clear_block_offload_cache()
 
         if not return_dict:
             return (output,)

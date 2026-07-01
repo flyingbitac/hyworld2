@@ -409,6 +409,64 @@ def stage(args: argparse.Namespace, label: str, command: str) -> None:
     docker_exec(args, f"set -euo pipefail; {command}")
 
 
+def skipped_stage(stage_number: int, label: str) -> None:
+    print(f"\n[RUN] Skip Stage {stage_number}: {label}", flush=True)
+
+
+def parse_skip_stages(spec: str) -> set[int]:
+    stages: set[int] = set()
+    if not spec.strip():
+        return stages
+    for raw_part in spec.split(","):
+        part = raw_part.strip()
+        if not part:
+            continue
+        if not part.isdigit():
+            raise ValueError("--skip must be a comma-separated list of stage numbers, e.g. 1,2,4.")
+        stage_number = int(part)
+        if stage_number < 1 or stage_number > 4:
+            raise ValueError("--skip only supports worldgen stages 1 through 4.")
+        stages.add(stage_number)
+    return stages
+
+
+def resolve_stage3_offload_mode(requested_mode: str, *, single_gpu: bool) -> str:
+    if single_gpu:
+        return "block" if requested_mode == "auto" else requested_mode
+    if requested_mode not in ("auto", "none"):
+        raise ValueError("--stage3-offload-mode model/sequential/block is only supported for single-GPU Stage 3 runs.")
+    return "none"
+
+
+def vlm_stop_command(scene: str) -> str:
+    return (
+        f"pid_file={shlex.quote(scene + '/vlm_server.pid')}; "
+        "pids=''; "
+        "if [ -f \"$pid_file\" ]; then pids=\"$pids $(cat \"$pid_file\")\"; fi; "
+        "if command -v pgrep >/dev/null 2>&1; then "
+        "pids=\"$pids $(pgrep -f '[v]lm_server.py|[l]aunch_vlm.sh' || true)\"; "
+        "fi; "
+        "pids=$(printf '%s\\n' $pids | awk '/^[0-9]+$/ && !seen[$1]++'); "
+        "if [ -n \"$pids\" ]; then "
+        "kill $pids 2>/dev/null || true; "
+        "for i in $(seq 1 30); do "
+        "alive=''; "
+        "for pid in $pids; do if kill -0 \"$pid\" 2>/dev/null; then alive=1; fi; done; "
+        "if [ -n \"$alive\" ]; then sleep 1; else break; fi; "
+        "done; "
+        "for pid in $pids; do if kill -0 \"$pid\" 2>/dev/null; then kill -9 \"$pid\" 2>/dev/null || true; fi; done; "
+        "echo \"VLM shim stopped: $(printf '%s' \"$pids\" | tr '\\n' ' ')\"; "
+        "else "
+        "echo 'No VLM shim process found to stop'; "
+        "fi; "
+        "rm -f \"$pid_file\"; "
+        "if command -v nvidia-smi >/dev/null 2>&1; then "
+        "echo 'GPU processes after VLM stop:'; "
+        "nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv,noheader,nounits || true; "
+        "fi"
+    )
+
+
 def run_workflow(args: argparse.Namespace) -> None:
     docker_available()
     if not re.fullmatch(r"[A-Za-z0-9._-]+", args.runname):
@@ -423,6 +481,11 @@ def run_workflow(args: argparse.Namespace) -> None:
     vlm_device = devices[1] if len(devices) > 1 else devices[0]
     all_devices = ",".join(devices)
     nproc = str(len(devices))
+    stage3_single_gpu = len(devices) == 1
+    stage3_launcher = f"torchrun --nproc_per_node={nproc} video_gen.py"
+    stage3_fsdp = "" if stage3_single_gpu else " --fsdp"
+    stage3_offload_mode = resolve_stage3_offload_mode(args.stage3_offload_mode, single_gpu=stage3_single_gpu)
+    skip_stages = parse_skip_stages(args.skip)
 
     if not image_exists(args.image):
         raise RuntimeError(f"Image does not exist: {args.image}. Run `python docker.py {args.variant} build` first.")
@@ -441,7 +504,7 @@ def run_workflow(args: argparse.Namespace) -> None:
     scene = f"{CONTAINER_WORKDIR}/examples/worldgen/{args.runname}"
     result_dir = f"{scene}/gs_results"
     prompt = args.prompt
-    skip = " --skip_exist" if args.skip_existing else ""
+    skip_existing_arg = " --skip_exist" if args.skip_existing else ""
     flux_panorama_lora_path = f"{CONTAINER_MODELS}/{FLUX_PANORAMA_LORA_DIR}"
     flux_panorama_lora_file = f"{flux_panorama_lora_path}/{FLUX_PANORAMA_LORA_WEIGHT}"
 
@@ -449,6 +512,12 @@ def run_workflow(args: argparse.Namespace) -> None:
     print(f"[RUN] scene:     {scene}", flush=True)
     print(f"[RUN] devices:   {all_devices}", flush=True)
     print(f"[RUN] panorama:  {args.panorama_backend}", flush=True)
+    if skip_stages:
+        print(f"[RUN] skip:      {','.join(str(stage_number) for stage_number in sorted(skip_stages))}", flush=True)
+    if stage3_single_gpu:
+        print(f"[RUN] stage3:   single GPU, offload mode {stage3_offload_mode}", flush=True)
+    else:
+        print("[RUN] stage3:   multi GPU, FSDP enabled", flush=True)
 
     try:
         stage(
@@ -457,10 +526,12 @@ def run_workflow(args: argparse.Namespace) -> None:
             shell_join("mkdir", "-p", scene),
         )
 
-        if args.panorama_backend == "hypano":
+        if 1 in skip_stages:
+            skipped_stage(1, "panorama generation")
+        elif args.panorama_backend == "hypano":
             stage(
                 args,
-                "Text prompt -> condition image (FLUX.2 Klein)",
+                "Stage 1: text prompt -> condition image (FLUX.2 Klein)",
                 (
                     f"cd {shlex.quote(CONTAINER_WORKDIR)} && "
                     f"CUDA_VISIBLE_DEVICES={shlex.quote(primary_device)} "
@@ -480,7 +551,7 @@ def run_workflow(args: argparse.Namespace) -> None:
 
             stage(
                 args,
-                "Condition image + prompt -> panorama (HY-Pano)",
+                "Stage 1: condition image + prompt -> panorama (HY-Pano)",
                 (
                     f"cd {shlex.quote(CONTAINER_WORKDIR + '/hyworld2/panogen')} && "
                     f"CUDA_VISIBLE_DEVICES={shlex.quote(primary_device)} "
@@ -503,7 +574,7 @@ def run_workflow(args: argparse.Namespace) -> None:
         elif args.panorama_backend == "flux-lora":
             stage(
                 args,
-                "Ensure FLUX.2 9B panorama LoRA",
+                "Stage 1: ensure FLUX.2 9B panorama LoRA",
                 (
                     f"cd {shlex.quote(CONTAINER_WORKDIR)} && "
                     f"if [ ! -f {shlex.quote(flux_panorama_lora_file)} ]; then "
@@ -525,7 +596,7 @@ def run_workflow(args: argparse.Namespace) -> None:
 
             stage(
                 args,
-                "Text prompt -> panorama (FLUX.2 Klein 9B panorama LoRA)",
+                "Stage 1: text prompt -> panorama (FLUX.2 Klein 9B panorama LoRA)",
                 (
                     f"cd {shlex.quote(CONTAINER_WORKDIR)} && "
                     f"CUDA_VISIBLE_DEVICES={shlex.quote(primary_device)} "
@@ -551,144 +622,133 @@ def run_workflow(args: argparse.Namespace) -> None:
         else:
             raise ValueError(f"Unsupported panorama backend: {args.panorama_backend!r}")
 
-        stage(
-            args,
-            "Start or reuse VLM shim for WorldNav",
-            (
-                f"cd {shlex.quote(CONTAINER_WORKDIR)} && "
-                f"mkdir -p {shlex.quote(scene)} && "
-                f"if {CONDA} run --no-capture-output -n hyworld2-pano python - <<'PY' 2>/dev/null\n"
-                "import urllib.request\n"
-                f"urllib.request.urlopen('http://127.0.0.1:{args.vlm_port}/health', timeout=2).read()\n"
-                "PY\n"
-                "then echo 'VLM shim already healthy'; "
-                "else "
-                f"nohup env CUDA_VISIBLE_DEVICES={shlex.quote(vlm_device)} PORT={args.vlm_port} "
-                f"scripts/launch_vlm.sh > {shlex.quote(scene + '/vlm_server.log')} 2>&1 & "
-                f"echo $! > {shlex.quote(scene + '/vlm_server.pid')}; "
-                f"{CONDA} run --no-capture-output -n hyworld2-pano python - <<'PY'\n"
-                "import pathlib, sys, time, urllib.request\n"
-                f"log = pathlib.Path({scene + '/vlm_server.log'!r})\n"
-                f"url = 'http://127.0.0.1:{args.vlm_port}/health'\n"
-                "for attempt in range(120):\n"
-                "    try:\n"
-                "        urllib.request.urlopen(url, timeout=2).read()\n"
-                "        print('VLM shim healthy', flush=True)\n"
-                "        break\n"
-                "    except Exception:\n"
-                "        if attempt % 6 == 0:\n"
-                "            print(f'waiting for VLM shim... {attempt * 5}s', flush=True)\n"
-                "        time.sleep(5)\n"
-                "else:\n"
-                "    print('VLM shim failed to become healthy. Last log lines:', flush=True)\n"
-                "    if log.exists():\n"
-                "        print('\\n'.join(log.read_text(errors='replace').splitlines()[-80:]), flush=True)\n"
-                "    sys.exit(1)\n"
-                "PY\n"
-                "fi"
-            ),
-        )
+        if 2 not in skip_stages:
+            stage(
+                args,
+                "Stage 2: start VLM shim for WorldNav",
+                (
+                    f"cd {shlex.quote(CONTAINER_WORKDIR)} && "
+                    f"mkdir -p {shlex.quote(scene)} && "
+                    f"nohup env CUDA_VISIBLE_DEVICES={shlex.quote(vlm_device)} PORT={args.vlm_port} "
+                    f"scripts/launch_vlm.sh > {shlex.quote(scene + '/vlm_server.log')} 2>&1 & "
+                    f"echo $! > {shlex.quote(scene + '/vlm_server.pid')}; "
+                    f"{CONDA} run --no-capture-output -n hyworld2-pano python - <<'PY'\n"
+                    "import pathlib, sys, time, urllib.request\n"
+                    f"log = pathlib.Path({scene + '/vlm_server.log'!r})\n"
+                    f"url = 'http://127.0.0.1:{args.vlm_port}/health'\n"
+                    "for attempt in range(120):\n"
+                    "    try:\n"
+                    "        urllib.request.urlopen(url, timeout=2).read()\n"
+                    "        print('VLM shim healthy', flush=True)\n"
+                    "        break\n"
+                    "    except Exception:\n"
+                    "        if attempt % 6 == 0:\n"
+                    "            print(f'waiting for VLM shim... {attempt * 5}s', flush=True)\n"
+                    "        time.sleep(5)\n"
+                    "else:\n"
+                    "    print('VLM shim failed to become healthy. Last log lines:', flush=True)\n"
+                    "    if log.exists():\n"
+                    "        print('\\n'.join(log.read_text(errors='replace').splitlines()[-80:]), flush=True)\n"
+                    "    sys.exit(1)\n"
+                    "PY"
+                ),
+            )
 
-        stage(
-            args,
-            "Stage 1: trajectory planning",
-            (
-                f"cd {shlex.quote(CONTAINER_WORKDIR + '/hyworld2/worldgen')} && "
-                f"CUDA_VISIBLE_DEVICES={shlex.quote(primary_device)} "
-                "/opt/miniconda3/bin/conda run --no-capture-output -n hyworld2 "
-                "python -u traj_generate.py "
-                f"--target_path {shlex.quote(scene)} "
-                f"--llm_addr localhost --llm_port {args.vlm_port} --llm_name Qwen/Qwen3-VL-8B-Instruct "
-                f"--apply_nav_traj --apply_up_route --apply_recon_iteration --force_vlm{skip}"
-            ),
-        )
+            stage(
+                args,
+                "Stage 2: trajectory planning",
+                (
+                    f"cd {shlex.quote(CONTAINER_WORKDIR + '/hyworld2/worldgen')} && "
+                    f"CUDA_VISIBLE_DEVICES={shlex.quote(primary_device)} "
+                    "/opt/miniconda3/bin/conda run --no-capture-output -n hyworld2 "
+                    "python -u traj_generate.py "
+                    f"--target_path {shlex.quote(scene)} "
+                    f"--llm_addr localhost --llm_port {args.vlm_port} --llm_name Qwen/Qwen3-VL-8B-Instruct "
+                    f"--apply_nav_traj --apply_up_route --apply_recon_iteration --force_vlm{skip_existing_arg}"
+                ),
+            )
 
-        stage(
-            args,
-            "Stage 2: trajectory rendering and VLM captions",
-            (
-                f"cd {shlex.quote(CONTAINER_WORKDIR + '/hyworld2/worldgen')} && "
-                f"CUDA_VISIBLE_DEVICES={shlex.quote(primary_device)} "
-                "/opt/miniconda3/bin/conda run --no-capture-output -n hyworld2 "
-                "torchrun --nproc_per_node=1 traj_render.py "
-                f"--target_path {shlex.quote(scene)} "
-                f"--llm_addr localhost --llm_port {args.vlm_port} --llm_name Qwen/Qwen3-VL-8B-Instruct"
-            ),
-        )
+            stage(
+                args,
+                "Stage 2: trajectory rendering and VLM captions",
+                (
+                    f"cd {shlex.quote(CONTAINER_WORKDIR + '/hyworld2/worldgen')} && "
+                    f"CUDA_VISIBLE_DEVICES={shlex.quote(primary_device)} "
+                    "/opt/miniconda3/bin/conda run --no-capture-output -n hyworld2 "
+                    "torchrun --nproc_per_node=1 traj_render.py "
+                    f"--target_path {shlex.quote(scene)} "
+                    f"--llm_addr localhost --llm_port {args.vlm_port} --llm_name Qwen/Qwen3-VL-8B-Instruct"
+                ),
+            )
 
-        stage(
-            args,
-            "Stop VLM shim after WorldNav stages",
-            (
-                f"pid_file={shlex.quote(scene + '/vlm_server.pid')}; "
-                "if [ -f \"$pid_file\" ]; then "
-                "pid=$(cat \"$pid_file\"); "
-                "if [ -n \"$pid\" ] && kill -0 \"$pid\" 2>/dev/null; then "
-                "kill \"$pid\"; "
-                "for i in $(seq 1 30); do "
-                "if kill -0 \"$pid\" 2>/dev/null; then sleep 1; else break; fi; "
-                "done; "
-                "if kill -0 \"$pid\" 2>/dev/null; then kill -9 \"$pid\"; fi; "
-                "echo \"VLM shim stopped: $pid\"; "
-                "else echo \"VLM shim pid is not running: $pid\"; "
-                "fi; "
-                "rm -f \"$pid_file\"; "
-                "else echo 'VLM shim pid file not found; nothing to stop'; "
-                "fi"
-            ),
-        )
+            stage(
+                args,
+                "Stage 2: stop VLM shim before Stage 3",
+                vlm_stop_command(scene),
+            )
+        else:
+            skipped_stage(2, "trajectory planning, rendering, and VLM captions")
+            if 3 not in skip_stages:
+                stage(args, "Ensure VLM shim is stopped before Stage 3", vlm_stop_command(scene))
 
-        stage(
-            args,
-            "Stage 3: WorldStereo expansion and WorldMirror generation bank",
-            (
-                f"cd {shlex.quote(CONTAINER_WORKDIR + '/hyworld2/worldgen')} && "
-                f"CUDA_VISIBLE_DEVICES={shlex.quote(all_devices)} "
-                "/opt/miniconda3/bin/conda run --no-capture-output -n hyworld2 "
-                f"torchrun --nproc_per_node={nproc} video_gen.py "
-                f"--target_path {shlex.quote(scene)} --fsdp --local_files_only{skip}"
-            ),
-        )
+        if 3 in skip_stages:
+            skipped_stage(3, "WorldStereo expansion and WorldMirror generation bank")
+        else:
+            stage(
+                args,
+                "Stage 3: WorldStereo expansion and WorldMirror generation bank",
+                (
+                    f"cd {shlex.quote(CONTAINER_WORKDIR + '/hyworld2/worldgen')} && "
+                    f"CUDA_VISIBLE_DEVICES={shlex.quote(all_devices)} "
+                    "/opt/miniconda3/bin/conda run --no-capture-output -n hyworld2 "
+                    f"{stage3_launcher} "
+                    f"--target_path {shlex.quote(scene)}{stage3_fsdp} --local_files_only "
+                    f"--offload-mode {stage3_offload_mode}{skip_existing_arg}"
+                ),
+            )
 
-        stage(
-            args,
-            "Stage 4: prepare 3DGS training data",
-            (
-                f"cd {shlex.quote(CONTAINER_WORKDIR + '/hyworld2/worldgen')} && "
-                f"CUDA_VISIBLE_DEVICES={shlex.quote(all_devices)} "
-                "/opt/miniconda3/bin/conda run --no-capture-output -n hyworld2 "
-                f"torchrun --nproc_per_node={nproc} gen_gs_data.py "
-                f"--root_path {shlex.quote(scene)} --save_normal --split_sky"
-            ),
-        )
+        if 4 in skip_stages:
+            skipped_stage(4, "prepare 3DGS training data, train and export 3DGS")
+        else:
+            stage(
+                args,
+                "Stage 4: prepare 3DGS training data",
+                (
+                    f"cd {shlex.quote(CONTAINER_WORKDIR + '/hyworld2/worldgen')} && "
+                    f"CUDA_VISIBLE_DEVICES={shlex.quote(all_devices)} "
+                    "/opt/miniconda3/bin/conda run --no-capture-output -n hyworld2 "
+                    f"torchrun --nproc_per_node={nproc} gen_gs_data.py "
+                    f"--root_path {shlex.quote(scene)} --save_normal --split_sky"
+                ),
+            )
 
-        stage(
-            args,
-            "Stage 5: train and export 3DGS",
-            (
-                f"cd {shlex.quote(CONTAINER_WORKDIR + '/hyworld2/worldgen')} && "
-                f"CUDA_VISIBLE_DEVICES={shlex.quote(primary_device)} "
-                "/opt/miniconda3/bin/conda run --no-capture-output -n hyworld2 "
-                "python -u -m world_gs_trainer default "
-                f"--data-dir {shlex.quote(scene + '/gs_data')} "
-                f"--result-dir {shlex.quote(result_dir)} "
-                f"--max-steps {args.gs_steps} --save-steps {args.gs_steps} "
-                f"--eval-steps {args.gs_steps} --ply-steps {args.gs_steps} "
-                "--save-ply --convert-to-spz --disable-video --disable-viewer "
-                "--use-scale-regularization --antialiased "
-                "--depth-loss --normal-loss --sky-depth-from-pcd "
-                "--use-mask-gaussian --mask-export-stochastic "
-                "--no-mask-export-anchor-protection --use-anchor-protection --export-mesh "
-                "--ssim-lambda 0 "
-                "--strategy.refine-start-iter 150 "
-                "--strategy.refine-stop-iter 2000 "
-                "--strategy.refine-every 100 "
-                "--strategy.refine-scale2d-stop-iter 2000 "
-                "--strategy.reset-every 99990 "
-                "--strategy.grow-grad2d 0.0001 "
-                "--strategy.prune-scale3d 0.1"
-            ),
-        )
+            stage(
+                args,
+                "Stage 4: train and export 3DGS",
+                (
+                    f"cd {shlex.quote(CONTAINER_WORKDIR + '/hyworld2/worldgen')} && "
+                    f"CUDA_VISIBLE_DEVICES={shlex.quote(primary_device)} "
+                    "/opt/miniconda3/bin/conda run --no-capture-output -n hyworld2 "
+                    "python -u -m world_gs_trainer default "
+                    f"--data-dir {shlex.quote(scene + '/gs_data')} "
+                    f"--result-dir {shlex.quote(result_dir)} "
+                    f"--max-steps {args.gs_steps} --save-steps {args.gs_steps} "
+                    f"--eval-steps {args.gs_steps} --ply-steps {args.gs_steps} "
+                    "--save-ply --convert-to-spz --disable-video --disable-viewer "
+                    "--use-scale-regularization --antialiased "
+                    "--depth-loss --normal-loss --sky-depth-from-pcd "
+                    "--use-mask-gaussian --mask-export-stochastic "
+                    "--no-mask-export-anchor-protection --use-anchor-protection --export-mesh "
+                    "--ssim-lambda 0 "
+                    "--strategy.refine-start-iter 150 "
+                    "--strategy.refine-stop-iter 2000 "
+                    "--strategy.refine-every 100 "
+                    "--strategy.refine-scale2d-stop-iter 2000 "
+                    "--strategy.reset-every 99990 "
+                    "--strategy.grow-grad2d 0.0001 "
+                    "--strategy.prune-scale3d 0.1"
+                ),
+            )
 
         print(f"\n[RUN] complete: {scene}", flush=True)
         print(f"[RUN] 3DGS result: {result_dir}", flush=True)
@@ -874,6 +934,13 @@ def add_action_parsers(parser: argparse.ArgumentParser) -> None:
     # Local wrapper only: upstream starts the OpenAI-compatible VLM server separately.
     run_parser.add_argument("--skip-existing", action="store_true", help="Pass --skip_exist to resumable worldgen stages.")
     # Local resume helper: forwards --skip_exist to stages that support it.
+    run_parser.add_argument("--skip", default="", help="Comma-separated worldgen stages to skip, e.g. 1,2,4.")
+    run_parser.add_argument(
+        "--stage3-offload-mode",
+        choices=("auto", "none", "model", "sequential", "block"),
+        default="auto",
+        help="WorldStereo Stage 3 offload mode. auto uses block on one GPU and none with multi-GPU FSDP.",
+    )
     run_parser.set_defaults(func=run_workflow)
 
 

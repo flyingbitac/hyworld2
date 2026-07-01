@@ -200,6 +200,11 @@ class RefKFDMDGeneratorPipeline(KeyframePipelineMixin, DiffusionPipeline, WanLor
         # 5. Prepare latent variables 31% 4.5-4.8s -> 0.5s -> 0.1s (next version)
         num_channels_latents = self.vae.config.z_dim
         image = self.video_processor.preprocess(image, height=height, width=width).to(device, dtype=torch.float32)
+        _ws_offload_mode = getattr(self, "_ws_offload_mode", os.environ.get("WS_STAGE3_OFFLOAD_MODE", "none"))
+        _accelerate_offload = _ws_offload_mode in ("model", "sequential")
+        _manual_vae_offload = (os.environ.get("WS_AUX_OFFLOAD", "0") == "1" and not _accelerate_offload) or _ws_offload_mode == "block"
+        if _manual_vae_offload:
+            self.vae.to(device)
         with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16, enabled=True):
             latents, condition = self.prepare_latents(
                 image,
@@ -257,8 +262,7 @@ class RefKFDMDGeneratorPipeline(KeyframePipelineMixin, DiffusionPipeline, WanLor
         # WS_AUX_OFFLOAD: the VAE is idle during the denoise loop (it only encoded the
         # condition above and will decode the output below). Park it on CPU to free
         # ~2.7 GiB/card so the transformer forward fits on 32 GiB GPUs.
-        _offload_vae = os.environ.get("WS_AUX_OFFLOAD", "0") == "1"
-        if _offload_vae:
+        if _manual_vae_offload:
             self.vae.to("cpu")
             gc.collect()
             torch.cuda.empty_cache()
@@ -336,7 +340,7 @@ class RefKFDMDGeneratorPipeline(KeyframePipelineMixin, DiffusionPipeline, WanLor
         self._current_timestep = None
 
         # 7. decode latent 2.5% 0.38s
-        if _offload_vae:
+        if _manual_vae_offload:
             self.vae.to(device)
         if not output_type == "latent":
             latents = latents.to(self.vae.dtype)
@@ -345,6 +349,10 @@ class RefKFDMDGeneratorPipeline(KeyframePipelineMixin, DiffusionPipeline, WanLor
             video = self.video_processor.postprocess_video(video, output_type=output_type)
         else:
             video = latents
+        if _ws_offload_mode == "block":
+            self.vae.to("cpu")
+            gc.collect()
+            torch.cuda.empty_cache()
 
         # Offload all models
         # self.maybe_free_model_hooks()

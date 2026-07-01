@@ -41,14 +41,20 @@ if __name__ == '__main__':
     parser.add_argument("--pcd_std_ratio", default=2.0, type=float, help="pointcloud filtering std ratio")
     parser.add_argument("--local_files_only", action="store_true", help="If True, avoid downloading the file and return the path to the local cached file if it exists.")
     parser.add_argument("--fsdp", action="store_true", help="Enable FSDP model sharding")
+    parser.add_argument("--offload-mode", choices=("none", "model", "sequential", "block"), default="none", help="Single-GPU WorldStereo offload mode.")
     parser.add_argument("--skip_exist", action="store_true", help="skip existing videos")
     parser.add_argument("--seed", default=1024, type=int, help="Random seed")
 
     args = parser.parse_args()
+    if args.fsdp and args.offload_mode != "none":
+        raise ValueError("--offload-mode cannot be combined with --fsdp.")
+    os.environ["WS_STAGE3_OFFLOAD_MODE"] = args.offload_mode
 
     rank = int(os.getenv("RANK", 0))
     world_size = int(os.getenv("WORLD_SIZE", 1))
     local_rank = int(os.getenv("LOCAL_RANK", 0))
+    if world_size > 1 and args.offload_mode != "none":
+        raise ValueError("--offload-mode model/sequential/block is only supported with WORLD_SIZE=1.")
     device = torch.device(f"cuda:{local_rank}")
     torch.cuda.set_device(local_rank)
     dist.init_process_group(
@@ -77,10 +83,34 @@ if __name__ == '__main__':
 
     # == setup models ==
     # Note: FP8 quantization is done INSIDE init_wan_from_cfg, BEFORE FSDP sharding
-    moge_model = MoGeModel.from_pretrained(resolve_moge_checkpoint(MOGE_ID)).to(device)
-    sam3_model = Sam3VideoModel.from_pretrained(SAM3_REPO_ID).to(device, dtype=torch.bfloat16)
+    retrieval_models_on_gpu = args.offload_mode == "none"
+    moge_model = MoGeModel.from_pretrained(resolve_moge_checkpoint(MOGE_ID))
+    sam3_model = Sam3VideoModel.from_pretrained(SAM3_REPO_ID)
+    if retrieval_models_on_gpu:
+        moge_model.to(device)
+        sam3_model.to(device, dtype=torch.bfloat16)
+        retrieval_models_device = device
+    else:
+        sam3_model.to(dtype=torch.bfloat16)
+        retrieval_models_device = torch.device("cpu")
     sam3_processor = Sam3VideoProcessor.from_pretrained(SAM3_REPO_ID)
-    rank0_log("Model init over...")
+    retrieval_models_state = {"device": retrieval_models_device}
+
+    def move_retrieval_models(target_device):
+        target_device = torch.device(target_device)
+        if retrieval_models_state["device"] == target_device:
+            return
+        moge_model.to(target_device)
+        if target_device.type == "cuda":
+            sam3_model.to(target_device, dtype=torch.bfloat16)
+        else:
+            sam3_model.to("cpu")
+        retrieval_models_state["device"] = target_device
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    rank0_log(f"Model init over... MoGe/SAM3 device={retrieval_models_state['device']}")
 
     # reset it to the fp32 as we make diffusion scheduler in fp32
     torch.set_default_dtype(torch.float)
@@ -94,6 +124,7 @@ if __name__ == '__main__':
         fsdp=args.fsdp,
         device_mesh=device_mesh,
         device=device,
+        offload_mode=args.offload_mode,
     )
     dist.barrier()
     generator = torch.Generator(device=device).manual_seed(args.seed)
@@ -195,19 +226,15 @@ if __name__ == '__main__':
                 # bank only needs them for retrieval/update_memory, which bracket the
                 # generation). Park them on CPU during generation to free ~4.4 GiB/card
                 # so the WS forward fits on 32 GiB GPUs.
-                _offload_aux = os.environ.get("WS_AUX_OFFLOAD", "0") == "1"
+                _offload_aux = args.offload_mode == "none" and os.environ.get("WS_AUX_OFFLOAD", "0") == "1"
                 if _offload_aux:
-                    moge_model.to("cpu")
-                    sam3_model.to("cpu")
-                    gc.collect()
-                    torch.cuda.empty_cache()
+                    move_retrieval_models("cpu")
                 try:
                     with timer.track("Video Model Inference"), torch.autocast("cuda", dtype=autocast_dtype, enabled=autocast_dtype is not None):
                         output = worldstereo.pipeline(**pipeline_kwargs).frames[0].float()
                 finally:
                     if _offload_aux:
-                        moge_model.to(device)
-                        sam3_model.to(device)
+                        move_retrieval_models(device)
 
                 gc.collect()
                 torch.cuda.empty_cache()
@@ -237,6 +264,7 @@ if __name__ == '__main__':
 
             if memory_bank is not None:
                 with timer.track("Run World Mirror"):
+                    move_retrieval_models(device)
                     memory_bank.apply_worldmirror(skip_exist=True)
                 dist.barrier()
 
