@@ -16,7 +16,7 @@ MODEL_DIRS = {
     "4b": "/models/FLUX.2-klein-4B",
     "9b": "/models/FLUX.2-klein-9B",
 }
-PANORAMA_TRIGGER = "Equirectangular 360 panorama"
+PANORAMA_PROMPT_PREFIX = "Equirectangular 360 panorama, "
 
 
 def parse_args() -> argparse.Namespace:
@@ -29,7 +29,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--panorama-trigger",
         action="store_true",
-        help=f"Prepend '{PANORAMA_TRIGGER}' when it is not already present.",
+        help=f"Ensure the prompt starts with '{PANORAMA_PROMPT_PREFIX}'.",
     )
     parser.add_argument("--prompt", required=True)
     parser.add_argument("--output", required=True)
@@ -116,8 +116,8 @@ def main() -> None:
         pipe.enable_model_cpu_offload(device=torch.device(args.device))
 
     prompt = args.prompt
-    if args.panorama_trigger and PANORAMA_TRIGGER.lower() not in prompt.lower():
-        prompt = f"{PANORAMA_TRIGGER}, {prompt}"
+    if args.panorama_trigger and not prompt.lower().startswith(PANORAMA_PROMPT_PREFIX.lower()):
+        prompt = f"{PANORAMA_PROMPT_PREFIX}{prompt}"
 
     generator = torch.Generator(device=args.device).manual_seed(args.seed)
     with torch.inference_mode():
