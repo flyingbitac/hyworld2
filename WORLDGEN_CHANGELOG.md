@@ -5,7 +5,7 @@
 ## 运行结论
 
 - 已跑通的有效路径：Stage3 使用 2 卡 WorldStereo + 单进程 WorldMirror，Stage4 使用 2 卡，Stage5 使用单卡 3DGS 并设置 `--ssim-lambda 0`。
-- FLUX.2 Klein 验证已完成：`hyworld2-pano` 不能直接复用，因为它缺少新版 Diffusers 的 `Flux2KleinPipeline`；base/isaac 两个容器均新增并验证了独立 `flux2` conda 环境。四组 `[base+4B]`、`[base+9B]`、`[isaac+4B]`、`[isaac+9B]` 的 text2img 和 HY-World Qwen img2pano 均已跑通。
+- FLUX.2 Klein 9B 验证已完成：`hyworld2-pano` 不能直接复用，因为它缺少新版 Diffusers 的 `Flux2KleinPipeline`；base/isaac 两个容器均新增并验证了独立 `flux2` conda 环境。当前 `docker.py` 只保留 9B 路径，text2img 和 HY-World Qwen img2pano 均已跑通。
 - `show_gs` 已能加载 `/workspace/hyworld2/examples/worldgen/case000/gs_results_single/ckpts/ckpt_3999_rank0.pt`。
 - Stage5 验证指标：PSNR `25.74`，SSIM `0.748`，LPIPS `0.302`，Gaussians `612349`。
 - Panogen Qwen-Image-Edit 已完成阶段级 GPU profile：fresh container 中使用 `--load-strategy balanced`，GPU0 峰值 `5489 MiB` / 平均利用率 `35.13%`，GPU1 峰值 `16453 MiB` / 平均利用率 `0.37%`。
@@ -22,13 +22,11 @@
 
 ## FLUX.2 Klein text2img + HY-World img2pano 验证
 
-目标是检查容器内是否已有环境可以跑 `black-forest-labs/FLUX.2-klein-4B` 和 `black-forest-labs/FLUX.2-klein-9B`，并在 base / isaac 两套容器里分别验证 text2img 和 HY-World 自带 img2pano。结论如下：
+目标是检查容器内是否已有环境可以跑 `black-forest-labs/FLUX.2-klein-9B`，并在 base / isaac 两套容器里分别验证 text2img 和 HY-World 自带 img2pano。结论如下：
 
 | 组合 | text2img 输出 | img2pano 输出 | 结果 |
 | --- | --- | --- | --- |
-| `base+4B` | `/tmp/flux2_klein_tests/base_4b/text2img.png`，`512x512` RGB，像素范围非空 | `/tmp/flux2_klein_tests/base_4b/pano_steps4.png`，`992x512` RGB，像素范围非空 | 通过 |
 | `base+9B` | `/tmp/flux2_klein_tests/base_9b/text2img.png`，`512x512` RGB，像素范围非空 | `/tmp/flux2_klein_tests/base_9b/pano_steps4.png`，`992x512` RGB，像素范围非空 | 通过 |
-| `isaac+4B` | `/tmp/flux2_klein_tests/isaac_4b/text2img.png`，`512x512` RGB，像素范围非空 | `/tmp/flux2_klein_tests/isaac_4b/pano_steps4.png`，`992x512` RGB，像素范围非空 | 通过 |
 | `isaac+9B` | `/tmp/flux2_klein_tests/isaac_9b/text2img.png`，`512x512` RGB，像素范围非空 | `/tmp/flux2_klein_tests/isaac_9b/pano_steps4.png`，`992x512` RGB，像素范围非空 | 通过 |
 
 环境结论：
@@ -40,9 +38,9 @@
 
 命令和参数结论：
 
-- text2img 使用 `scripts/flux2_klein_text2img.py`，默认模型路径为 `/models/FLUX.2-klein-4B` 和 `/models/FLUX.2-klein-9B`，测试参数为 `--height 512 --width 512 --steps 1 --placement offload`。
+- text2img 使用 `scripts/flux2_klein_text2img.py`，默认模型路径为 `/models/FLUX.2-klein-9B`，测试参数为 `--height 512 --width 512 --steps 1 --placement offload`。
 - HY-World img2pano 使用 `hyworld2/panogen/pipeline_with_qwen_image.py`、`/models/Qwen/Qwen-Image-Edit-2509` 和 `/models/HY-World-2.0/HY-Pano-2.0` LoRA。
-- `--load-strategy cpu-offload` 在 `base+4B` 上真实进入 Qwen pano 推理后占到约 `31.3 GiB` 并 OOM；切换为脚本支持的 `--load-strategy sequential-offload` 后通过。
+- `--load-strategy cpu-offload` 在 Qwen pano 推理中占到约 `31.3 GiB` 并 OOM；切换为脚本支持的 `--load-strategy sequential-offload` 后通过。
 - `--num-inference-steps 1` 虽能保存文件，但输出为全黑图，并伴随 scheduler NaN warning，不能作为 img2pano 跑通证据；最终有效验证使用 `--num-inference-steps 4`。
 - 直接用 `conda run` 会缓冲命令输出，长推理时容易看起来像卡住；文档命令统一使用 `conda run --no-capture-output` 和 `python -u`。
 - `balanced + HY-Pano LoRA` 已定位为不稳定组合：第一步 transformer conditional forward 的 `noise_pred_cond` 即全 NaN/Inf。代码已禁用 `balanced` 并提示使用 `sequential-offload`。

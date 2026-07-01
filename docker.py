@@ -19,7 +19,7 @@ REPO_ROOT = Path(__file__).resolve().parent
 DEFAULT_IMAGE = "hyworld2-isaaclab:3.0.0-beta2"
 DEFAULT_CONTAINER = "hyworld2-isaaclab"
 DEFAULT_DOCKERFILE = Path("Dockerfile.isaac")
-DEFAULT_MODELS = Path("/data/hyworld/models")
+DEFAULT_MODELS = Path("~/ws/hyworld2-models").expanduser()
 CONTAINER_WORKDIR = "/workspace/hyworld2"
 CONTAINER_MODELS = "/models"
 DEFAULT_VARIANT = "base"
@@ -29,7 +29,6 @@ FLUX_PANORAMA_LORA_REPO = "crafiq/flux-2-klein-9b-360-panorama-lora"
 FLUX_PANORAMA_LORA_DIR = "flux-2-klein-9b-360-panorama-lora"
 FLUX_PANORAMA_LORA_WEIGHT = "flux-2-klein-9b-360-panorama-lora.safetensors"
 MODEL_DOWNLOADS = (
-    ("black-forest-labs/FLUX.2-klein-4B", "black-forest-labs/FLUX.2-klein-4B", "FLUX.2-klein-4B", ()),
     ("black-forest-labs/FLUX.2-klein-9B", "black-forest-labs/FLUX.2-klein-9B", "FLUX.2-klein-9B", ()),
     (
         FLUX_PANORAMA_LORA_REPO,
@@ -46,7 +45,7 @@ MODEL_DOWNLOADS = (
     ),
     ("Qwen/Qwen3-VL-8B-Instruct", "Qwen/Qwen3-VL-8B-Instruct", "Qwen/Qwen3-VL-8B-Instruct", ()),
     ("facebook/sam3", "facebook/sam3", "sam3", ()),
-    ("hanshanxue/WorldStereo", "hanshanxue/WorldStereo", "WorldStereo", ()),
+    ("hanshanxue/WorldStereo", "hanshanxue/WorldStereo", "WorldStereo", ("worldstereo-memory-dmd/*",)),
     (
         "Wan-AI/Wan2.1-I2V-14B-480P-Diffusers",
         "Wan-AI/Wan2.1-I2V-14B-480P-Diffusers",
@@ -64,7 +63,6 @@ HY_WORLD_REQUIRED_FILES = (
     "HY-WorldMirror-2.0/model.safetensors",
 )
 MODEL_REQUIRED_FILES = {
-    "FLUX.2-klein-4B": ("model_index.json",),
     "FLUX.2-klein-9B": ("model_index.json",),
     FLUX_PANORAMA_LORA_DIR: (FLUX_PANORAMA_LORA_WEIGHT,),
     "Qwen/Qwen-Image-Edit-2509": ("model_index.json",),
@@ -479,6 +477,8 @@ def run_workflow(args: argparse.Namespace) -> None:
     for part in devices:
         if not part.isdigit():
             raise ValueError("--device must be a comma-separated list of CUDA device ids, e.g. 0 or 0,1.")
+    if args.batchsize < 1:
+        raise ValueError("--batchsize must be a positive integer.")
     primary_device = devices[0]
     vlm_device = devices[1] if len(devices) > 1 else devices[0]
     all_devices = ",".join(devices)
@@ -539,7 +539,8 @@ def run_workflow(args: argparse.Namespace) -> None:
                     f"CUDA_VISIBLE_DEVICES={shlex.quote(primary_device)} "
                     "/opt/miniconda3/bin/conda run --no-capture-output -n flux2 "
                     "python -u scripts/flux2_klein_text2img.py "
-                    f"--model {shlex.quote(args.flux_model)} "
+                    "--model 9b "
+                    "--model-path /models/FLUX.2-klein-9B "
                     f"--prompt {shlex.quote(prompt)} "
                     f"--output {shlex.quote(scene + '/condition.png')} "
                     f"--height {args.condition_height} "
@@ -736,6 +737,7 @@ def run_workflow(args: argparse.Namespace) -> None:
                     f"--result-dir {shlex.quote(result_dir)} "
                     f"--max-steps {args.gs_steps} --save-steps {args.gs_steps} "
                     f"--eval-steps {args.gs_steps} --ply-steps {args.gs_steps} "
+                    f"--batch-size {args.batchsize} "
                     "--save-ply --convert-to-spz --disable-video --disable-viewer "
                     "--use-scale-regularization --antialiased "
                     "--depth-loss --normal-loss --sky-depth-from-pcd "
@@ -917,7 +919,6 @@ def add_action_parsers(parser: argparse.ArgumentParser) -> None:
         default="hypano",
         help="Panorama generation path: FLUX condition image + HY-Pano, or direct FLUX.2 9B panorama LoRA.",
     )
-    run_parser.add_argument("--flux-model", choices=("4b", "9b"), default="4b")
     run_parser.add_argument("--flux-steps", type=int, default=4)
     run_parser.add_argument("--flux-guidance-scale", type=float, default=1.0)
     run_parser.add_argument("--condition-height", type=int, default=1024)
@@ -930,7 +931,8 @@ def add_action_parsers(parser: argparse.ArgumentParser) -> None:
     run_parser.add_argument("--pano-height", type=int, default=960)
     run_parser.add_argument("--pano-width", type=int, default=1952)
     run_parser.add_argument("--gs-steps", type=int, default=4000)
-    # Differs from upstream 8-GPU example max_steps=1500; 4000 matches the local 2-GPU runbook.
+    run_parser.add_argument("--batchsize", type=int, default=4, help="Per-GPU 3DGS training batch size.")
+    # Differs from upstream 8-GPU example max_steps=1500; local runs usually trade more steps for fewer GPUs.
     run_parser.add_argument("--seed", type=int, default=42)
     run_parser.add_argument("--vlm-port", type=int, default=8000)
     # Local wrapper only: upstream starts the OpenAI-compatible VLM server separately.

@@ -11,36 +11,28 @@
 
 ## 模型清单与下载链接
 
-完整 prompt -> 3DGS 流程会用到下面这些模型。`/models/...` 是容器内路径，对应宿主机默认 `/data/hyworld/models/...`。本地运行默认只使用这些显式目录，不依赖 Hugging Face cache 结构。
+完整 prompt -> 3DGS 流程会用到下面这些模型。`/models/...` 是容器内路径，对应宿主机默认 `~/ws/hyworld2-models/...`。本地运行默认只使用这些显式目录，不依赖 Hugging Face cache 结构。
 
-可以用 `docker.py download` 通过 ModelScope CLI 下载整套模型，目录结构会按下面表格和本地 `/data/hyworld/models` 对齐：
-
-```bash
-conda activate torch
-python docker.py download --path /data/hyworld/models
-```
-
-该命令会先调用 `modelscope download --model <model-id> --local_dir <target-dir>`；如果 ModelScope 没有对应 repo，会自动 fallback 到 `hf download <repo-id> --local-dir <target-dir>`，并设置 `HF_ENDPOINT=https://hf-mirror.com`。先检查命令列表可用 `--dry-run`。如果不激活 conda 环境，也可以直接用装了 ModelScope/Hugging Face Hub 的解释器运行，例如 `/home/zxh/miniconda3/envs/torch/bin/python docker.py download --path /data/hyworld/models`。
+模型下载方式见下方 Docker 运行步骤中的“下载模型”。
 
 | 模型 | 用途 | 容器内默认位置 / repo id | 大小 | ModelScope | Hugging Face |
 |------|------|--------------------------|------|------------|--------------|
-| FLUX.2 Klein 4B | 文本生成条件图，`--flux-model 4b` | `/models/FLUX.2-klein-4B` | 23G | [black-forest-labs/FLUX.2-klein-4B](https://www.modelscope.cn/models/black-forest-labs/FLUX.2-klein-4B) | [black-forest-labs/FLUX.2-klein-4B](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B) |
-| FLUX.2 Klein 9B | 文本生成条件图，`--flux-model 9b`；也是 `--panorama-backend flux-lora` 的 base model | `/models/FLUX.2-klein-9B` | 50G | [black-forest-labs/FLUX.2-klein-9B](https://www.modelscope.cn/models/black-forest-labs/FLUX.2-klein-9B) | [black-forest-labs/FLUX.2-klein-9B](https://huggingface.co/black-forest-labs/FLUX.2-klein-9B) |
+| FLUX.2 Klein 9B | 文本生成条件图；也是 `--panorama-backend flux-lora` 的 base model | `/models/FLUX.2-klein-9B` | 50G | [black-forest-labs/FLUX.2-klein-9B](https://www.modelscope.cn/models/black-forest-labs/FLUX.2-klein-9B) | [black-forest-labs/FLUX.2-klein-9B](https://huggingface.co/black-forest-labs/FLUX.2-klein-9B) |
 | FLUX.2 Klein 9B 360 Panorama LoRA | `--panorama-backend flux-lora` 直接从 prompt 生成 2:1 全景图 | `/models/flux-2-klein-9b-360-panorama-lora` | 约 0.4G | 无；`download` 会 fallback 到 Hugging Face | [crafiq/flux-2-klein-9b-360-panorama-lora](https://huggingface.co/crafiq/flux-2-klein-9b-360-panorama-lora) |
 | Qwen-Image-Edit-2509 | HY-Pano Qwen backend base model | `/models/Qwen/Qwen-Image-Edit-2509` | 54G | [Qwen/Qwen-Image-Edit-2509](https://www.modelscope.cn/models/Qwen/Qwen-Image-Edit-2509) | [Qwen/Qwen-Image-Edit-2509](https://huggingface.co/Qwen/Qwen-Image-Edit-2509) |
 | HY-World 2.0 | HY-Pano-Qwen LoRA 和 WorldMirror 权重；`download` 默认跳过 80B full HY-Pano | `/models/HY-World-2.0`，只需 `HY-Pano-2.0/pytorch_lora_weights.safetensors` 和 `HY-WorldMirror-2.0/` | 约 5.6G | [Tencent-Hunyuan/HY-World-2.0](https://www.modelscope.cn/models/Tencent-Hunyuan/HY-World-2.0/files) | [tencent/HY-World-2.0](https://huggingface.co/tencent/HY-World-2.0) |
-| Qwen3-VL-8B-Instruct | WorldNav / Stage1-2 的 OpenAI-compatible VLM shim | `/models/Qwen/Qwen3-VL-8B-Instruct` | 17G | [Qwen/Qwen3-VL-8B-Instruct](https://www.modelscope.cn/models/Qwen/Qwen3-VL-8B-Instruct) | [Qwen/Qwen3-VL-8B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct) |
-| SAM3 | Stage1 目标分割、Stage3/WorldMirror sky/semantic mask | `/models/sam3`，由 `SAM3_REPO_ID` 指定 | 6.5G | [facebook/sam3](https://www.modelscope.cn/models/facebook/sam3) | [facebook/sam3](https://huggingface.co/facebook/sam3) |
-| WorldStereo | Stage3 WorldStereo adapter 权重 | `/models/WorldStereo`，包含 `worldstereo-camera/`、`worldstereo-memory/`、`worldstereo-memory-dmd/` | 64G | [hanshanxue/WorldStereo](https://www.modelscope.cn/models/hanshanxue/WorldStereo) | [hanshanxue/WorldStereo](https://huggingface.co/hanshanxue/WorldStereo) |
+| Qwen3-VL-8B-Instruct | WorldNav trajectory planning / VLM captions 的 OpenAI-compatible VLM shim | `/models/Qwen/Qwen3-VL-8B-Instruct` | 17G | [Qwen/Qwen3-VL-8B-Instruct](https://www.modelscope.cn/models/Qwen/Qwen3-VL-8B-Instruct) | [Qwen/Qwen3-VL-8B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct) |
+| SAM3 | WorldNav 目标分割、WorldMirror sky/semantic mask | `/models/sam3`，由 `SAM3_REPO_ID` 指定 | 6.5G | [facebook/sam3](https://www.modelscope.cn/models/facebook/sam3) | [facebook/sam3](https://huggingface.co/facebook/sam3) |
+| WorldStereo | Stage3 WorldStereo adapter 权重；当前 `docker.py run` 默认只使用 `worldstereo-memory-dmd/` | `/models/WorldStereo/worldstereo-memory-dmd` | 33G | [hanshanxue/WorldStereo](https://www.modelscope.cn/models/hanshanxue/WorldStereo) | [hanshanxue/WorldStereo](https://huggingface.co/hanshanxue/WorldStereo) |
 | Wan2.1 I2V 14B Diffusers | WorldStereo base video model；由 `WORLDSTEREO_BASE_MODEL` 指定 | `/models/Wan2.1-I2V-14B-480P-Diffusers` | 约 32G | [Wan-AI/Wan2.1-I2V-14B-480P-Diffusers](https://www.modelscope.cn/models/Wan-AI/Wan2.1-I2V-14B-480P-Diffusers) | [Wan-AI/Wan2.1-I2V-14B-480P-Diffusers](https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P-Diffusers) |
-| MoGe v2 ViT-L normal | Stage1 深度/法线、Stage3/4 几何和法线估计 | `/models/moge-2-vitl-normal`，由 `MOGE_MODEL` 指定 | 约 1.3G | [Ruicheng/moge-2-vitl-normal](https://www.modelscope.cn/models/Ruicheng/moge-2-vitl-normal) | [Ruicheng/moge-2-vitl-normal](https://huggingface.co/Ruicheng/moge-2-vitl-normal) |
-| ZIM Anything ViT-L | Stage1 mask refinement | `/models/zim-anything-vitl`，使用 `zim_vit_l_2092/` 子目录，由 `ZIM_MODEL` 指定 | 约 1.2G | [naver-iv/zim-anything-vitl](https://www.modelscope.cn/models/naver-iv/zim-anything-vitl) | [naver-iv/zim-anything-vitl](https://huggingface.co/naver-iv/zim-anything-vitl) |
-| GroundingDINO tiny | Stage1 grounding / object mask 辅助 | `/models/grounding-dino-tiny`，由 `GROUNDING_DINO_MODEL` 指定 | 约 1.3G | [IDEA-Research/grounding-dino-tiny](https://www.modelscope.cn/models/IDEA-Research/grounding-dino-tiny) | [IDEA-Research/grounding-dino-tiny](https://huggingface.co/IDEA-Research/grounding-dino-tiny) |
+| MoGe v2 ViT-L normal | WorldNav 深度/法线、WorldMirror/3DGS 几何和法线估计 | `/models/moge-2-vitl-normal`，由 `MOGE_MODEL` 指定 | 约 1.3G | [Ruicheng/moge-2-vitl-normal](https://www.modelscope.cn/models/Ruicheng/moge-2-vitl-normal) | [Ruicheng/moge-2-vitl-normal](https://huggingface.co/Ruicheng/moge-2-vitl-normal) |
+| ZIM Anything ViT-L | WorldNav mask refinement | `/models/zim-anything-vitl`，使用 `zim_vit_l_2092/` 子目录，由 `ZIM_MODEL` 指定 | 约 1.2G | [naver-iv/zim-anything-vitl](https://www.modelscope.cn/models/naver-iv/zim-anything-vitl) | [naver-iv/zim-anything-vitl](https://huggingface.co/naver-iv/zim-anything-vitl) |
+| GroundingDINO tiny | WorldNav grounding / object mask 辅助 | `/models/grounding-dino-tiny`，由 `GROUNDING_DINO_MODEL` 指定 | 约 1.3G | [IDEA-Research/grounding-dino-tiny](https://www.modelscope.cn/models/IDEA-Research/grounding-dino-tiny) | [IDEA-Research/grounding-dino-tiny](https://huggingface.co/IDEA-Research/grounding-dino-tiny) |
 | DINOv2 base | WorldMirror memory-bank camera selector | `/models/dinov2-base`，由 `CAMERA_SELECTOR_MODEL` 指定 | 约 0.7G | [facebook/dinov2-base](https://www.modelscope.cn/models/facebook/dinov2-base) | [facebook/dinov2-base](https://huggingface.co/facebook/dinov2-base) |
 
 ## Docker 运行步骤
 
-### 1. 在宿主机启动容器
+### 1. 构建、启动和验证容器
 
 ```bash
 cd /home/zxh/ws/hyworld2
@@ -68,7 +60,26 @@ python docker.py isaac stop
 
 如果命令里省略 `base` / `isaac`，`docker.py` 默认使用 `base` 变体，例如 `python docker.py run ...` 等价于 `python docker.py base run ...`。
 
-也可以直接从宿主机启动完整 prompt -> 条件图 -> 全景图 -> 3DGS 流程。命令会自动进入对应容器执行各阶段，阶段开始时在终端打印 `[RUN] ...`，并透传容器内命令输出：
+### 2. 下载模型
+
+`docker.py download` 会通过 ModelScope CLI 下载当前 prompt -> 3DGS 流程需要的模型，目录结构会按上面的模型表和本地 `~/ws/hyworld2-models` 对齐：
+
+```bash
+conda activate torch
+python docker.py download --path ~/ws/hyworld2-models
+```
+
+先检查命令列表可用 `--dry-run`：
+
+```bash
+python docker.py download --path ~/ws/hyworld2-models --dry-run
+```
+
+该命令会先调用 `modelscope download --model <model-id> --local_dir <target-dir>`；如果 ModelScope 没有对应 repo，会自动 fallback 到 `hf download <repo-id> --local-dir <target-dir>`，并设置 `HF_ENDPOINT=https://hf-mirror.com`。如果不激活 conda 环境，也可以直接用装了 ModelScope/Hugging Face Hub 的解释器运行，例如 `/home/zxh/miniconda3/envs/torch/bin/python docker.py download --path ~/ws/hyworld2-models`。
+
+### 3. 使用 `docker.py run` 一键执行
+
+可以直接从宿主机启动完整 prompt -> 条件图 -> 全景图 -> 3DGS 流程。命令会自动进入对应容器执行各阶段，阶段开始时在终端打印 `[RUN] ...`，并透传容器内命令输出：
 
 ```bash
 python docker.py base run \
@@ -87,11 +98,13 @@ python docker.py run \
   --device 0,1
 ```
 
-`run` 不会自动 build 镜像；如果镜像不存在会直接报错。若对应容器已经存在，命令会启动/复用该容器并在退出时保留；若同名容器完全不存在，命令会临时启动一个容器并在流程结束或失败后自动关闭，且会把 `/models` 挂载为可写以便使用本地模型目录。`--device 0` 会用单卡跑完整流程；`--device 0,1` 会用第 0 张卡跑 FLUX/HY-Pano/Stage1/Stage5，用第 1 张卡跑 VLM shim，Stage3/4 使用两张卡。恢复已有场景时加 `--skip-existing`。
+`run` 不会自动 build 镜像；如果镜像不存在会直接报错。若对应容器已经存在，命令会启动/复用该容器并在退出时保留；若同名容器完全不存在，命令会临时启动一个容器并在流程结束或失败后自动关闭，且会把 `/models` 挂载为可写以便使用本地模型目录。`--device 0` 会用单卡跑完整流程，Stage3 默认使用 `group-stream` offload；`--device 0,1` 会用第 0 张卡跑 FLUX/HY-Pano、WorldNav 主进程和 3DGS training，用第 1 张卡跑 VLM shim，Stage3 和 `gen_gs_data.py` 使用两张卡。3DGS 训练的每 GPU 图像 batch 可用 `--batchsize N` 调整，默认 `4`。恢复已有场景时加 `--skip-existing`。
 
 两个 panorama backend 默认都用 `1952x960` 做 panorama 推理；HY-Pano 会默认融合并裁掉 32px 接缝，FLUX LoRA 路径也会用 `--flux-pano-blend-width 32` 做同样处理，因此最终 `$SCENE/panorama.png` 默认保存为 `1920x960`。可分别用 `--pano-height/--pano-width`、`--flux-pano-height/--flux-pano-width` 和 `--flux-pano-blend-width` 覆盖。
 
-`docker.py` 默认把仓库挂载到容器内 `/workspace/hyworld2`，把模型目录 `/data/hyworld/models` 挂载到 `/models`，并挂载 Hugging Face、Torch 和 Matplotlib 缓存目录。
+### 4. 挂载路径和容器环境
+
+`docker.py` 默认把仓库挂载到容器内 `/workspace/hyworld2`，把模型目录 `~/ws/hyworld2-models` 挂载到 `/models`，并挂载 Hugging Face、Torch 和 Matplotlib 缓存目录。
 
 容器内常用 conda 环境如下：
 
@@ -103,21 +116,25 @@ python docker.py run \
 
 下面的长推理命令都使用 `conda run --no-capture-output` 和 `python -u`，避免 `conda run` 缓冲日志导致终端长时间看不到进度。
 
-### 2. 进入容器后设置场景变量
+## 手动运行
+
+下面的命令适合需要逐步调试、复用中间产物或绕开 `docker.py run` wrapper 的情况。
+
+### 1. 进入容器后设置场景变量
 
 ```bash
 cd /workspace/hyworld2
 
 SCENE=/workspace/hyworld2/examples/worldgen/my_prompt_scene
-RESULT_DIR=$SCENE/gs_results_prompt
+RESULT_DIR=$SCENE/gs_results
 PROMPT="a realistic sunny mountain village with stone paths, trees, and distant snow peaks"
 
 mkdir -p "$SCENE"
 ```
 
-后续命令默认模型已经在 `/models` 下，例如 `/models/HY-World-2.0`、`/models/Qwen/Qwen-Image-Edit-2509`、`/models/FLUX.2-klein-4B` 或 `/models/FLUX.2-klein-9B`。
+后续命令默认模型已经在 `/models` 下，例如 `/models/HY-World-2.0`、`/models/Qwen/Qwen-Image-Edit-2509` 和 `/models/FLUX.2-klein-9B`。
 
-### 3. 从纯文本 prompt 生成条件图
+### 2. 从纯文本 prompt 生成条件图
 
 如果你已经有一张输入图，可以跳过这一步，直接设置：
 
@@ -132,7 +149,8 @@ cd /workspace/hyworld2
 
 CUDA_VISIBLE_DEVICES=0 /opt/miniconda3/bin/conda run --no-capture-output -n flux2 \
   python -u scripts/flux2_klein_text2img.py \
-    --model 4b \
+    --model 9b \
+    --model-path /models/FLUX.2-klein-9B \
     --prompt "$PROMPT" \
     --output "$SCENE/condition.png" \
     --height 1024 \
@@ -149,13 +167,13 @@ INPUT_IMAGE=$SCENE/condition.png
 
 | 参数 | 说明 |
 |------|------|
-| `--model` | `4b` 更省显存，`9b` 质量更高但更慢、更占显存。 |
-| `--model-path` | 覆盖默认模型路径，用于测试其它本地 FLUX.2 Klein 权重。 |
+| `--model` | 使用 `9b`，与 `docker.py run` 默认路径一致。 |
+| `--model-path` | 本地 FLUX.2 Klein 9B 权重路径，默认使用 `/models/FLUX.2-klein-9B`。 |
 | `--height` / `--width` | 条件图分辨率；1024x1024 是常用起点。 |
 | `--steps` | FLUX.2 采样步数；烟测可用 1，正式生成建议从 4 开始。 |
 | `--placement` | `offload` 降低峰值显存；`cuda` 更快但更吃显存。 |
 
-### 4. 生成 360 度全景图
+### 3. 生成 360 度全景图
 
 如果 `$SCENE/panorama.png` 已存在，可以跳过本节。否则用条件图和 prompt 生成全景图：
 
@@ -188,50 +206,69 @@ CUDA_VISIBLE_DEVICES=0 /opt/miniconda3/bin/conda run --no-capture-output -n hywo
 | `--num-inference-steps` | 采样步数；先用 `4` 验证输出非空，再逐步加到 `8/16/24`。不要一开始直接 40。 |
 | `--load-strategy` | 推荐 `sequential-offload`。`balanced` 已禁用；`cpu-offload` 曾在 32GB 卡上 OOM。 |
 
-### 5. 运行 WorldNav、WorldStereo、WorldMirror 和 3DGS
+### 4. 运行 WorldNav、WorldStereo、WorldMirror 和 3DGS
 
-Stage 1/2 需要一个 OpenAI-compatible VLM 服务。先在 GPU1 启动本地 shim：
+`docker.py run` 把完整流程组织成 4 个可跳过的 wrapper stage：
+
+| Stage | 内容 |
+|------|------|
+| `1` | panorama generation：`hypano` 路径会先用 FLUX.2 9B 生成条件图，再用 HY-Pano 生成全景图；`flux-lora` 路径直接生成全景图。 |
+| `2` | trajectory planning、trajectory rendering 和 VLM captions；wrapper 会自动启动并在 Stage3 前停止 VLM shim。 |
+| `3` | WorldStereo expansion 和 WorldMirror generation bank。 |
+| `4` | `gen_gs_data.py` 数据准备，以及 `world_gs_trainer` 训练/导出 3DGS。 |
+
+手动运行时需要自己管理 OpenAI-compatible VLM 服务。先在 GPU1 启动本地 shim：
 
 ```bash
 cd /workspace/hyworld2
 CUDA_VISIBLE_DEVICES=1 PORT=8000 scripts/launch_vlm.sh > /tmp/hyworld_vlm.log 2>&1 &
 ```
 
-然后执行五个阶段：
+然后执行后续命令：
 
 ```bash
 cd /workspace/hyworld2/hyworld2/worldgen
 
-# Stage 1: 轨迹规划。
+# 对应 docker.py run Stage 2: 轨迹规划。
 CUDA_VISIBLE_DEVICES=0 /opt/miniconda3/bin/conda run --no-capture-output -n hyworld2 \
   python -u traj_generate.py \
     --target_path "$SCENE" \
     --llm_addr localhost --llm_port 8000 --llm_name Qwen/Qwen3-VL-8B-Instruct \
     --apply_nav_traj --apply_up_route --apply_recon_iteration --force_vlm
 
-# Stage 2: 轨迹渲染和 VLM caption。
+# 对应 docker.py run Stage 2: 轨迹渲染和 VLM caption。
 CUDA_VISIBLE_DEVICES=0 /opt/miniconda3/bin/conda run --no-capture-output -n hyworld2 \
   torchrun --nproc_per_node=1 traj_render.py \
     --target_path "$SCENE" \
     --llm_addr localhost --llm_port 8000 --llm_name Qwen/Qwen3-VL-8B-Instruct
 
-# Stage 3: WorldStereo 扩展视角 + WorldMirror generation bank。
+# Stage 3 之前释放 VLM 显存。
+pkill -f '[v]lm_server.py|[l]aunch_vlm.sh' || true
+
+# 对应 docker.py run Stage 3: WorldStereo 扩展视角 + WorldMirror generation bank。
+# 多卡手动运行：
 CUDA_VISIBLE_DEVICES=0,1 /opt/miniconda3/bin/conda run --no-capture-output -n hyworld2 \
   torchrun --nproc_per_node=2 video_gen.py \
     --target_path "$SCENE" --fsdp --local_files_only
 
-# Stage 4: 准备 3DGS 训练数据。
+# 单卡手动运行：不要加 --fsdp；使用和 docker.py run --device 0 默认一致的 group-stream。
+CUDA_VISIBLE_DEVICES=0 /opt/miniconda3/bin/conda run --no-capture-output -n hyworld2 \
+  torchrun --nproc_per_node=1 video_gen.py \
+    --target_path "$SCENE" --local_files_only --offload-mode group-stream
+
+# 对应 docker.py run Stage 4: 准备 3DGS 训练数据。
 CUDA_VISIBLE_DEVICES=0,1 /opt/miniconda3/bin/conda run --no-capture-output -n hyworld2 \
   torchrun --nproc_per_node=2 gen_gs_data.py \
     --root_path "$SCENE" --save_normal --split_sky
 
-# Stage 5: 训练并导出 3DGS。--ssim-lambda 0 用于避开测试环境中
+# 对应 docker.py run Stage 4: 训练并导出 3DGS。--ssim-lambda 0 用于避开测试环境中
 # RTX 5090/sm_120 上不稳定的 fused SSIM kernel 路径。
 CUDA_VISIBLE_DEVICES=0 /opt/miniconda3/bin/conda run --no-capture-output -n hyworld2 \
   python -u -m world_gs_trainer default \
     --data-dir "$SCENE/gs_data" \
     --result-dir "$RESULT_DIR" \
     --max-steps 4000 --save-steps 4000 --eval-steps 4000 --ply-steps 4000 \
+    --batch-size 1 \
     --save-ply --convert-to-spz --disable-video --disable-viewer \
     --use-scale-regularization --antialiased \
     --depth-loss --normal-loss --sky-depth-from-pcd \
@@ -251,11 +288,13 @@ CUDA_VISIBLE_DEVICES=0 /opt/miniconda3/bin/conda run --no-capture-output -n hywo
 
 | 参数 | 用途 |
 |------|------|
-| `--skip_exist` | 跳过已经存在的 Stage1/Stage3 产物，适合 resume。 |
+| `--skip-existing` | `docker.py run` 参数；转发为底层脚本的 `--skip_exist`，跳过已有 Stage2/Stage3 产物，适合 resume。 |
+| `--skip 1,2,3,4` | `docker.py run` 参数；跳过指定 wrapper stage。例如已有全景图时可用 `--skip 1`。 |
 | `--local_files_only` | 只使用本地模型缓存，避免运行时访问 Hugging Face。 |
-| `--fsdp` | Stage3 多卡 WorldStereo/WorldMirror 路径。 |
+| `--stage3-offload-mode auto` | `docker.py run` 默认；单卡解析为 `group-stream`，多卡解析为 `none` 并启用 FSDP。 |
+| `--fsdp` | 手动运行 `video_gen.py` 的多卡参数；`docker.py run --device 0,1` 会自动添加。 |
 
-### 6. 查看生成的 3DGS
+### 5. 查看生成的 3DGS
 
 ```bash
 CKPT=$(ls "$RESULT_DIR"/ckpts/ckpt_*_rank0.pt | sort -V | tail -1)

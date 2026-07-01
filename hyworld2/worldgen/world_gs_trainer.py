@@ -1058,10 +1058,23 @@ class Runner:
                     opt_depth = True
                 if cfg.sky_depth_from_pcd:
                     original_depth_mask = (depths_gt > 1e-4)  # before sky merge
-                    image_id_val = data["image_id"].item() if isinstance(data["image_id"], torch.Tensor) else data["image_id"]
-                    if image_id_val in self.sky_depth_maps and self.sky_depth_maps[image_id_val] is not None:
-                        depths_gt = self.sky_depth_maps[image_id_val].unsqueeze(0).to(device)
-                        opt_depth = True
+                    image_id_values = data["image_id"]
+                    if isinstance(image_id_values, torch.Tensor):
+                        image_id_values = image_id_values.detach().cpu().reshape(-1).tolist()
+                    elif not isinstance(image_id_values, (list, tuple)):
+                        image_id_values = [image_id_values]
+                    if self.sky_depth_maps:
+                        merged_depths_gt = depths_gt.clone()
+                        used_sky_depth = False
+                        for batch_idx, image_id_val in enumerate(image_id_values):
+                            sky_depth = self.sky_depth_maps.get(int(image_id_val))
+                            if sky_depth is None:
+                                continue
+                            merged_depths_gt[batch_idx] = sky_depth.to(device=device, dtype=depths_gt.dtype)
+                            used_sky_depth = True
+                        if used_sky_depth:
+                            depths_gt = merged_depths_gt
+                            opt_depth = True
             else:
                 depths_gt = None
 
@@ -1206,7 +1219,13 @@ class Runner:
 
             if opt_normal:
                 depths = depths.permute(0, 3, 1, 2)  # [B, 1, H, W]
-                intrinsics = Ks.repeat(depths.shape[0], 1, 1)
+                intrinsics = Ks
+                if intrinsics.shape[0] == 1 and depths.shape[0] > 1:
+                    intrinsics = intrinsics.expand(depths.shape[0], -1, -1)
+                elif intrinsics.shape[0] != depths.shape[0]:
+                    raise RuntimeError(
+                        f"Expected {depths.shape[0]} intrinsic matrices, got {intrinsics.shape[0]}."
+                    )
                 if cfg.sky_depth_from_pcd and original_depth_mask is not None:
                     normal_mask = original_depth_mask.unsqueeze(1) if original_depth_mask.ndim == 3 else original_depth_mask
                     normal_mask = normal_mask & (depths > 0)
