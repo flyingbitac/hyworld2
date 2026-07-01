@@ -93,7 +93,7 @@ warnings.filterwarnings("ignore", category=UserWarning, module="diffusers")
 # ──────────────────────────────────────────────────────────────────────
 
 SUPPORTED_MODEL_TYPES = ("worldstereo-camera", "worldstereo-memory", "worldstereo-memory-dmd")
-SUPPORTED_OFFLOAD_MODES = ("none", "model", "sequential", "block")
+SUPPORTED_OFFLOAD_MODES = ("none", "model", "sequential", "block", "group-stream")
 
 
 def _normalize_offload_mode(offload_mode: str | None) -> str:
@@ -102,6 +102,8 @@ def _normalize_offload_mode(offload_mode: str | None) -> str:
         "model-offload": "model",
         "sequential-offload": "sequential",
         "block-offload": "block",
+        "group_stream": "group-stream",
+        "group-stream-offload": "group-stream",
     }
     mode = aliases.get(mode, mode)
     if mode not in SUPPORTED_OFFLOAD_MODES:
@@ -200,8 +202,8 @@ class WorldStereo:
                 f"Unsupported model_type {model_type!r}. "
                 f"Expected one of {SUPPORTED_MODEL_TYPES}."
             )
-        if offload_mode == "block" and model_type == "worldstereo-camera":
-            raise ValueError("WorldStereo block offload is only implemented for memory/ref models.")
+        if offload_mode in ("block", "group-stream") and model_type == "worldstereo-camera":
+            raise ValueError("WorldStereo block/group-stream offload is only implemented for memory/ref models.")
 
         transformer = cls._load_transformer(
             cfg,
@@ -251,6 +253,10 @@ class WorldStereo:
             rank0_log("Enabling WorldStereo transformer block CPU offload.")
             transformer.enable_block_cpu_offload(device)
             cls._install_encode_aware_offload(pipeline, device)
+        elif offload_mode == "group-stream":
+            rank0_log("Enabling Diffusers streamed group CPU offload for WorldStereo.")
+            cls._install_group_stream_offload(transformer, device)
+            cls._install_encode_aware_offload(pipeline, device)
         elif os.environ.get("WS_AUX_OFFLOAD", "0") == "1" and not fsdp:
             # Non-FSDP lazy offload only. Under FSDP, _load_aux passes CPUOffloadPolicy
             # to fully_shard (per-op on/offload), so no manual .to() wrap is needed.
@@ -258,6 +264,36 @@ class WorldStereo:
 
         rank0_log(f"WorldStereo ({model_type}) ready. offload_mode={offload_mode}")
         return cls(pipeline=pipeline, cfg=cfg)
+
+    @staticmethod
+    def _install_group_stream_offload(transformer, device):
+        from diffusers.hooks import apply_group_offloading
+
+        kwargs = dict(
+            onload_device=device,
+            offload_device=torch.device("cpu"),
+            offload_type="block_level",
+            num_blocks_per_group=1,
+            non_blocking=True,
+            use_stream=True,
+            record_stream=True,
+        )
+
+        controlnet = getattr(transformer, "controlnet", None)
+        has_controlnet = controlnet is not None
+        if has_controlnet:
+            delattr(transformer, "controlnet")
+        try:
+            apply_group_offloading(transformer, **kwargs)
+        finally:
+            if has_controlnet:
+                transformer.controlnet = controlnet
+
+        if has_controlnet:
+            apply_group_offloading(transformer.controlnet, **kwargs)
+            rank0_log("Diffusers group offload installed for transformer blocks and ControlNet blocks.")
+        else:
+            rank0_log("Diffusers group offload installed for transformer blocks.")
 
     @staticmethod
     def _install_encode_aware_offload(pipeline, device):
@@ -427,7 +463,7 @@ class WorldStereo:
                 fully_shard(layer, **fsdp_kwargs)
             fully_shard(transformer, **fsdp_kwargs)
             rank0_log("FSDP wrapping done for transformer.")
-        elif offload_mode in ("model", "sequential", "block"):
+        elif offload_mode in ("model", "sequential", "block", "group-stream"):
             transformer = transformer.to(dtype=half_dtype, device="cpu")
             rank0_log(f"Keeping transformer on CPU for offload mode {offload_mode}.")
         else:
@@ -452,7 +488,7 @@ class WorldStereo:
         _text_dtype_name = os.environ.get("WS_TEXT_DTYPE", "fp32")
         text_dt = torch.bfloat16 if _text_dtype_name == "bf16" else torch.float32
         aux_offload = os.environ.get("WS_AUX_OFFLOAD", "0") == "1"
-        keep_on_cpu = offload_mode in ("model", "sequential", "block")
+        keep_on_cpu = offload_mode in ("model", "sequential", "block", "group-stream")
         rank0_log(f"aux encoders: dtype={_text_dtype_name} offload={aux_offload} keep_on_cpu={keep_on_cpu}")
 
         # ---- text encoder ----

@@ -41,7 +41,7 @@ if __name__ == '__main__':
     parser.add_argument("--pcd_std_ratio", default=2.0, type=float, help="pointcloud filtering std ratio")
     parser.add_argument("--local_files_only", action="store_true", help="If True, avoid downloading the file and return the path to the local cached file if it exists.")
     parser.add_argument("--fsdp", action="store_true", help="Enable FSDP model sharding")
-    parser.add_argument("--offload-mode", choices=("none", "model", "sequential", "block"), default="none", help="Single-GPU WorldStereo offload mode.")
+    parser.add_argument("--offload-mode", choices=("none", "model", "sequential", "block", "group-stream"), default="none", help="Single-GPU WorldStereo offload mode.")
     parser.add_argument("--skip_exist", action="store_true", help="skip existing videos")
     parser.add_argument("--seed", default=1024, type=int, help="Random seed")
 
@@ -54,7 +54,7 @@ if __name__ == '__main__':
     world_size = int(os.getenv("WORLD_SIZE", 1))
     local_rank = int(os.getenv("LOCAL_RANK", 0))
     if world_size > 1 and args.offload_mode != "none":
-        raise ValueError("--offload-mode model/sequential/block is only supported with WORLD_SIZE=1.")
+        raise ValueError("--offload-mode model/sequential/block/group-stream is only supported with WORLD_SIZE=1.")
     device = torch.device(f"cuda:{local_rank}")
     torch.cuda.set_device(local_rank)
     dist.init_process_group(

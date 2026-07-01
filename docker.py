@@ -432,9 +432,11 @@ def parse_skip_stages(spec: str) -> set[int]:
 
 def resolve_stage3_offload_mode(requested_mode: str, *, single_gpu: bool) -> str:
     if single_gpu:
-        return "block" if requested_mode == "auto" else requested_mode
+        return "group-stream" if requested_mode == "auto" else requested_mode
     if requested_mode not in ("auto", "none"):
-        raise ValueError("--stage3-offload-mode model/sequential/block is only supported for single-GPU Stage 3 runs.")
+        raise ValueError(
+            "--stage3-offload-mode model/sequential/block/group-stream is only supported for single-GPU Stage 3 runs."
+        )
     return "none"
 
 
@@ -937,9 +939,9 @@ def add_action_parsers(parser: argparse.ArgumentParser) -> None:
     run_parser.add_argument("--skip", default="", help="Comma-separated worldgen stages to skip, e.g. 1,2,4.")
     run_parser.add_argument(
         "--stage3-offload-mode",
-        choices=("auto", "none", "model", "sequential", "block"),
+        choices=("auto", "none", "model", "sequential", "block", "group-stream"),
         default="auto",
-        help="WorldStereo Stage 3 offload mode. auto uses block on one GPU and none with multi-GPU FSDP.",
+        help="WorldStereo Stage 3 offload mode. auto uses group-stream on one GPU and none with multi-GPU FSDP.",
     )
     run_parser.set_defaults(func=run_workflow)
 

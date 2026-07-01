@@ -202,7 +202,10 @@ class RefKFDMDGeneratorPipeline(KeyframePipelineMixin, DiffusionPipeline, WanLor
         image = self.video_processor.preprocess(image, height=height, width=width).to(device, dtype=torch.float32)
         _ws_offload_mode = getattr(self, "_ws_offload_mode", os.environ.get("WS_STAGE3_OFFLOAD_MODE", "none"))
         _accelerate_offload = _ws_offload_mode in ("model", "sequential")
-        _manual_vae_offload = (os.environ.get("WS_AUX_OFFLOAD", "0") == "1" and not _accelerate_offload) or _ws_offload_mode == "block"
+        _manual_vae_offload = (
+            _ws_offload_mode in ("block", "group-stream")
+            or (os.environ.get("WS_AUX_OFFLOAD", "0") == "1" and not _accelerate_offload)
+        )
         if _manual_vae_offload:
             self.vae.to(device)
         with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16, enabled=True):
@@ -349,7 +352,7 @@ class RefKFDMDGeneratorPipeline(KeyframePipelineMixin, DiffusionPipeline, WanLor
             video = self.video_processor.postprocess_video(video, output_type=output_type)
         else:
             video = latents
-        if _ws_offload_mode == "block":
+        if _ws_offload_mode in ("block", "group-stream"):
             self.vae.to("cpu")
             gc.collect()
             torch.cuda.empty_cache()
