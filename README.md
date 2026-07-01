@@ -11,7 +11,7 @@
 
 ## 模型清单与下载链接
 
-完整 prompt -> 3DGS 流程会用到下面这些模型。`/models/...` 是容器内路径，对应宿主机默认 `~/ws/hyworld2-models/...`。本地运行默认只使用这些显式目录，不依赖 Hugging Face cache 结构。
+完整 prompt -> 3DGS 流程会用到下面这些模型。`/models/...` 是容器内路径，对应宿主机默认仓库下的 `models/...`。本地运行默认只使用这些显式目录，不依赖 Hugging Face cache 结构。
 
 模型下载方式见下方 Docker 运行步骤中的“下载模型”。
 
@@ -62,20 +62,20 @@ python docker.py isaac stop
 
 ### 2. 下载模型
 
-`docker.py download` 会通过 ModelScope CLI 下载当前 prompt -> 3DGS 流程需要的模型，目录结构会按上面的模型表和本地 `~/ws/hyworld2-models` 对齐：
+`docker.py download` 会通过 ModelScope CLI 下载当前 prompt -> 3DGS 流程需要的模型，目录结构会按上面的模型表和仓库下的 `models/` 对齐：
 
 ```bash
 conda activate torch
-python docker.py download --path ~/ws/hyworld2-models
+python docker.py download --path ./models
 ```
 
 先检查命令列表可用 `--dry-run`：
 
 ```bash
-python docker.py download --path ~/ws/hyworld2-models --dry-run
+python docker.py download --path ./models --dry-run
 ```
 
-该命令会先调用 `modelscope download --model <model-id> --local_dir <target-dir>`；如果 ModelScope 没有对应 repo，会自动 fallback 到 `hf download <repo-id> --local-dir <target-dir>`，并设置 `HF_ENDPOINT=https://hf-mirror.com`。如果不激活 conda 环境，也可以直接用装了 ModelScope/Hugging Face Hub 的解释器运行，例如 `/home/zxh/miniconda3/envs/torch/bin/python docker.py download --path ~/ws/hyworld2-models`。
+该命令会先调用 `modelscope download --model <model-id> --local_dir <target-dir>`；如果 ModelScope 没有对应 repo，会自动 fallback 到 `hf download <repo-id> --local-dir <target-dir>`，并设置 `HF_ENDPOINT=https://hf-mirror.com`。如果不激活 conda 环境，也可以直接用装了 ModelScope/Hugging Face Hub 的解释器运行，例如 `/home/zxh/miniconda3/envs/torch/bin/python docker.py download --path ./models`。
 
 ### 3. 使用 `docker.py run` 一键执行
 
@@ -104,7 +104,7 @@ python docker.py run \
 
 ### 4. 挂载路径和容器环境
 
-`docker.py` 默认把仓库挂载到容器内 `/workspace/hyworld2`，把模型目录 `~/ws/hyworld2-models` 挂载到 `/models`，并挂载 Hugging Face、Torch 和 Matplotlib 缓存目录。
+`docker.py` 默认把仓库挂载到容器内 `/workspace/hyworld2`，把仓库下的 `models/` 挂载到 `/models`，并挂载 Hugging Face、Torch 和 Matplotlib 缓存目录。
 
 容器内常用 conda 环境如下：
 

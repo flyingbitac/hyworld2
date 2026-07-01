@@ -19,7 +19,7 @@ REPO_ROOT = Path(__file__).resolve().parent
 DEFAULT_IMAGE = "hyworld2-isaaclab:3.0.0-beta2"
 DEFAULT_CONTAINER = "hyworld2-isaaclab"
 DEFAULT_DOCKERFILE = Path("Dockerfile.isaac")
-DEFAULT_MODELS = Path("~/ws/hyworld2-models").expanduser()
+DEFAULT_MODELS = REPO_ROOT / "models"
 CONTAINER_WORKDIR = "/workspace/hyworld2"
 CONTAINER_MODELS = "/models"
 DEFAULT_VARIANT = "base"
@@ -892,7 +892,7 @@ def add_action_parsers(parser: argparse.ArgumentParser) -> None:
         "download",
         help="Download all models required by the prompt-to-3DGS workflow via ModelScope.",
     )
-    download_parser.add_argument("--path", type=Path, required=True, help="Target model root, e.g. /data/hyworld/models.")
+    download_parser.add_argument("--path", type=Path, required=True, help="Target model root, e.g. ./models.")
     download_parser.add_argument("--dry-run", action="store_true", help="Print ModelScope commands without downloading.")
     download_parser.add_argument("--force", action="store_true", help="Download even when the target directory is non-empty.")
     download_parser.add_argument(
