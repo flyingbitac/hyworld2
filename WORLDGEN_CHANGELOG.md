@@ -224,6 +224,7 @@ CUDA_VISIBLE_DEVICES=0 /opt/miniconda3/bin/conda run --no-capture-output -n hywo
 | 容器 | `Dockerfile` | 新增 CUDA 12.8、conda 环境、worldgen 依赖、`requirements_git.txt` 源码安装 pytorch3d、rtree，并复用 `hyworld2-pano` 运行 VLM shim | 让镜像构建后具备 Stage1-Stage5 所需依赖 | 不是显存优化 |
 | 容器 | `Dockerfile` | 安装 `requirements_git.txt` 时设置 `FORCE_CUDA=1 MAX_JOBS=4 CMAKE_BUILD_PARALLEL_LEVEL=4` | 确保 PyTorch3D 编译 CUDA rasterizer，避免 Stage1/2 点云渲染报 `Not compiled with GPU support`；限制编译并发避免 CPU 全满 | 不是显存优化；保证使用 GPU rasterization |
 | 容器 | `Dockerfile` | 设置 `PIP_INDEX_URL=https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple`，并用 `mjun0812/flash-attention-prebuild-wheels` 的 `flash_attn-2.8.2+cu128torch2.7-cp311` wheel 替代源码编译 | 加速镜像构建，避免 flash-attn 本地 CUDA 编译占用大量 CPU | 不是显存优化；构建时间/CPU 优化 |
+| 容器 | `Dockerfile` | 默认 `TORCH_CUDA_ARCH_LIST=8.0;8.9;12.0`、`CMAKE_CUDA_ARCHITECTURES=80;89;120` | 同一个镜像构建 CUDA 扩展时覆盖 A100、RTX 4090 和 RTX 5090 | 不是显存优化；扩大运行 GPU 架构兼容范围 |
 | 容器 | `Dockerfile` | 安装 `libglm-dev` | gsplat CUDA 扩展需要 `<glm/...>` 头文件；用系统包替代未跟踪的 30MB `csrc/third_party/glm` clone | 不是显存优化 |
 | 容器 | `Dockerfile` | 默认 `HF_HOME=/models/.cache/huggingface`、`HUGGINGFACE_HUB_CACHE=/models/.cache/huggingface/hub` | 使用只读模型挂载中的预下载权重，避免运行时下载 | 不是显存优化 |
 | 容器 | `Dockerfile` | 默认 `SAM3_REPO_ID=/models/sam3`、`WORLDSTEREO_REPO=/models/WorldStereo`、`WORLDMIRROR_MODEL=/models/HY-World-2.0`、`CAMERA_SELECTOR_MODEL=facebook/dinov2-base` | 消除运行 Stage1/3 时必须手动指定本地模型路径的问题 | 不是显存优化 |
@@ -231,6 +232,7 @@ CUDA_VISIBLE_DEVICES=0 /opt/miniconda3/bin/conda run --no-capture-output -n hywo
 | 容器 | `Dockerfile` | 默认 `WORLDMIRROR_NPROC_PER_NODE=1`、`WORLDMIRROR_TARGET_SIZE=512`、`WORLDMIRROR_CUDA_VISIBLE_DEVICES=0` | 避开 2 卡 FSDP WorldMirror 在 291 张图、832 target size 上的 NCCL/CUDA illegal memory access | 失败路径 OOM/illegal memory；单卡 512 profile 峰值 `14081 MiB` |
 | 容器启动 | `docker.py` | 不再把 `HF_HOME` / hub cache 覆盖到 `/cache/huggingface` | 保持 Dockerfile 默认的 `/models/.cache/huggingface`，否则 Wan/MoGe/SAM3/WorldStereo 解析会失败 | 不是显存优化 |
 | 容器启动 | `docker.py` | 保留单一 `python docker.py ...` 命令入口，默认镜像为 `hyworld2-base:3.0.0-beta2` | 降低镜像选择和容器启动复杂度 | 不是显存优化 |
+| 容器启动 | `docker.py pull` | 从 `crpi-jq3nu6qbricb9zcb.cn-beijing.personal.cr.aliyuncs.com/zxh_in_bitac/hyworld2:<tag>` 拉取镜像，并默认 retag 为本地 `hyworld2-base:3.0.0-beta2` | 允许直接使用已发布镜像，不必每台机器本地编译 | 不是显存优化 |
 | 容器启动 | `docker.py verify` | 新增 PyTorch3D CUDA rasterizer runtime check，并显式校验 worldgen runtime env defaults | import check 无法发现 CPU-only PyTorch3D；runtime env check 确认 Dockerfile 构建出的容器无需手工再设置本地模型路径和低显存参数 | 不是显存优化 |
 | 离线模型 | `worldstereo_wrapper.py` | `_resolve_local_snapshot()` 将 Wan base model repo id 解析到本地 HF snapshot | 避免离线/镜像环境下 diffusers 尝试访问 Hugging Face | 不是显存优化 |
 | WorldStereo | `worldstereo_wrapper.py` | `WS_TEXT_DTYPE=bf16` 控制 UMT5/CLIP 加载 dtype | 降低文本和图像编码器权重占用 | 组件估算：UMT5 约节省 `12.5 GiB/card`，CLIP 约减半；需保留全流程实测 |

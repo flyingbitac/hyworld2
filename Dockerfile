@@ -5,7 +5,11 @@ SHELL ["/bin/bash", "-lc"]
 # HY-World worldgen image based on Ubuntu 24.04 + CUDA 12.8.
 ARG MINICONDA_URL=https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
 ARG CONDA_DIR=/opt/miniconda3
-ARG CUDA_ARCH_LIST=12.0
+# Build CUDA extensions once for A100 (sm_80), RTX 4090 (sm_89), and RTX 5090
+# (sm_120). PyTorch extensions read TORCH_CUDA_ARCH_LIST, while some CMake
+# projects read CMAKE_CUDA_ARCHITECTURES/CUDAARCHS.
+ARG CUDA_ARCH_LIST=8.0;8.9;12.0
+ARG CUDA_ARCHITECTURES=80;89;120
 ARG INSTALL_FLASH_ATTN=1
 ARG INSTALL_WORLDGEN_EXTRAS=1
 ARG FLASH_ATTN_WHEEL_URL=https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.3.14/flash_attn-2.8.2+cu128torch2.7-cp311-cp311-linux_x86_64.whl
@@ -33,6 +37,8 @@ ENV CUDA_HOME=/usr/local/cuda-12.8
 ENV PATH=${CUDA_HOME}/bin:${PATH}
 ENV LD_LIBRARY_PATH=${CUDA_HOME}/lib64
 ENV TORCH_CUDA_ARCH_LIST=${CUDA_ARCH_LIST}
+ENV CMAKE_CUDA_ARCHITECTURES=${CUDA_ARCHITECTURES}
+ENV CUDAARCHS=${CUDA_ARCHITECTURES}
 ENV MAX_JOBS=8
 ENV INSTALL_WORLDGEN_EXTRAS=${INSTALL_WORLDGEN_EXTRAS}
 

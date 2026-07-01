@@ -27,16 +27,23 @@
 
 ## Docker 运行步骤
 
-### 1. 构建、启动和验证容器
+### 1. 拉取或构建、启动和验证容器
 
 ```bash
 cd /home/zxh/ws/hyworld2
 
+# 已发布镜像路径：拉取后会自动 retag 为 hyworld2-base:3.0.0-beta2
+python docker.py pull
+
+# 或者本机从 Dockerfile 构建
 python docker.py build
+
 python docker.py start
 python docker.py verify
 python docker.py enter
 ```
+
+当前 Dockerfile 会把 CUDA 扩展同时编译进 A100、RTX 4090 和 RTX 5090 对应的 `sm_80/sm_89/sm_120` 架构。若要拉取其他镜像版本，用 `python docker.py pull --tag <version>`。
 
 常用宿主机命令：
 

@@ -20,6 +20,7 @@ DEFAULT_IMAGE = "hyworld2-base:3.0.0-beta2"
 DEFAULT_CONTAINER = "hyworld2-base"
 DEFAULT_DOCKERFILE = Path("Dockerfile")
 DEFAULT_MODELS = REPO_ROOT / "models"
+ALIYUN_IMAGE = "crpi-jq3nu6qbricb9zcb.cn-beijing.personal.cr.aliyuncs.com/zxh_in_bitac/hyworld2"
 CONTAINER_WORKDIR = "/workspace/hyworld2"
 CONTAINER_MODELS = "/models"
 CONDA = "/opt/miniconda3/bin/conda"
@@ -157,6 +158,13 @@ def image_exists(image: str) -> bool:
     return bool(capture(["docker", "image", "inspect", image, "--format", "{{.Id}}"]))
 
 
+def image_tag(image: str) -> str:
+    image_name = image.rsplit("/", 1)[-1]
+    if ":" not in image_name:
+        return "latest"
+    return image_name.rsplit(":", 1)[1]
+
+
 def container_running(name: str) -> bool:
     names = capture(["docker", "ps", "--format", "{{.Names}}"]).splitlines()
     return name in names
@@ -227,6 +235,15 @@ def build(args: argparse.Namespace) -> None:
         str(REPO_ROOT),
     ]
     run(command)
+
+
+def pull_image(args: argparse.Namespace) -> None:
+    docker_available()
+    remote_image = f"{ALIYUN_IMAGE}:{args.tag}"
+    run(["docker", "pull", remote_image])
+    if args.retag:
+        run(["docker", "tag", remote_image, args.image])
+        print(f"[PULL] tagged {remote_image} as {args.image}", flush=True)
 
 
 def start(args: argparse.Namespace) -> None:
@@ -810,6 +827,24 @@ def add_action_parsers(parser: argparse.ArgumentParser) -> None:
     build_parser.add_argument("--no-flash-attn", dest="flash_attn", action="store_false", default=True)
     build_parser.add_argument("--no-worldgen-extras", dest="worldgen_extras", action="store_false", default=True)
     build_parser.set_defaults(func=build)
+
+    pull_parser = subparsers.add_parser(
+        "pull",
+        help="Pull the published HY-World image from the Aliyun registry.",
+    )
+    pull_parser.add_argument(
+        "--tag",
+        default=image_tag(DEFAULT_IMAGE),
+        help=f"Registry tag to pull from {ALIYUN_IMAGE}.",
+    )
+    pull_parser.add_argument(
+        "--no-retag",
+        dest="retag",
+        action="store_false",
+        default=True,
+        help="Do not retag the pulled image as --image.",
+    )
+    pull_parser.set_defaults(func=pull_image)
 
     start_parser = subparsers.add_parser("start")
     start_parser.add_argument("--build", action="store_true", help="Build the image first if it is missing.")
