@@ -16,14 +16,12 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parent
-DEFAULT_IMAGE = "hyworld2-isaaclab:3.0.0-beta2"
-DEFAULT_CONTAINER = "hyworld2-isaaclab"
-DEFAULT_DOCKERFILE = Path("Dockerfile.isaac")
+DEFAULT_IMAGE = "hyworld2-base:3.0.0-beta2"
+DEFAULT_CONTAINER = "hyworld2-base"
+DEFAULT_DOCKERFILE = Path("Dockerfile")
 DEFAULT_MODELS = REPO_ROOT / "models"
 CONTAINER_WORKDIR = "/workspace/hyworld2"
 CONTAINER_MODELS = "/models"
-DEFAULT_VARIANT = "base"
-COMMANDS = ("build", "start", "enter", "exec", "verify", "status", "stop", "run", "download")
 CONDA = "/opt/miniconda3/bin/conda"
 FLUX_PANORAMA_LORA_REPO = "crafiq/flux-2-klein-9b-360-panorama-lora"
 FLUX_PANORAMA_LORA_DIR = "flux-2-klein-9b-360-panorama-lora"
@@ -83,20 +81,6 @@ MODEL_REQUIRED_FILES = {
     ),
     "dinov2-base": ("config.json", "preprocessor_config.json", "model.safetensors"),
 }
-VARIANTS = {
-    "isaac": {
-        "image": DEFAULT_IMAGE,
-        "name": DEFAULT_CONTAINER,
-        "dockerfile": DEFAULT_DOCKERFILE,
-    },
-    "base": {
-        "image": "hyworld2-base:3.0.0-beta2",
-        "name": "hyworld2-base",
-        "dockerfile": Path("Dockerfile.base"),
-    },
-}
-
-
 def shell_join(*parts: str) -> str:
     return " ".join(shlex.quote(str(part)) for part in parts)
 
@@ -183,11 +167,7 @@ def container_exists(name: str) -> bool:
     return name in names
 
 
-def using_isaac(args: argparse.Namespace) -> bool:
-    return args.variant == "isaac"
-
-
-def cache_root(include_isaac: bool) -> Path:
+def cache_root() -> Path:
     root = Path(os.environ.get("HYWORLD_DOCKER_CACHE", "~/.cache/hyworld2-docker")).expanduser()
     root.mkdir(parents=True, exist_ok=True)
     os.chmod(root, 0o777)
@@ -196,19 +176,6 @@ def cache_root(include_isaac: bool) -> Path:
         "torch",
         "matplotlib",
     ]
-    if include_isaac:
-        subdirs.extend(
-            [
-                "isaac-sim/cache/kit",
-                "isaac-sim/cache/ov",
-                "isaac-sim/cache/pip",
-                "isaac-sim/cache/glcache",
-                "isaac-sim/cache/computecache",
-                "isaac-sim/logs",
-                "isaac-sim/data",
-                "isaac-sim/documents",
-            ]
-        )
     for subdir in subdirs:
         path = root.joinpath(subdir)
         path.mkdir(parents=True, exist_ok=True)
@@ -216,8 +183,8 @@ def cache_root(include_isaac: bool) -> Path:
     return root
 
 
-def mount_args(models: Path, writable_models: bool, include_isaac: bool) -> list[str]:
-    root = cache_root(include_isaac)
+def mount_args(models: Path, writable_models: bool) -> list[str]:
+    root = cache_root()
     mounts = [
         (REPO_ROOT, CONTAINER_WORKDIR, False),
         (models.expanduser(), CONTAINER_MODELS, not writable_models),
@@ -225,19 +192,6 @@ def mount_args(models: Path, writable_models: bool, include_isaac: bool) -> list
         (root / "torch", "/cache/torch", False),
         (root / "matplotlib", "/cache/matplotlib", False),
     ]
-    if include_isaac:
-        mounts.extend(
-            [
-                (root / "isaac-sim/cache/kit", "/isaac-sim/kit/cache", False),
-                (root / "isaac-sim/cache/ov", "/root/.cache/ov", False),
-                (root / "isaac-sim/cache/pip", "/root/.cache/pip", False),
-                (root / "isaac-sim/cache/glcache", "/root/.cache/nvidia/GLCache", False),
-                (root / "isaac-sim/cache/computecache", "/root/.nv/ComputeCache", False),
-                (root / "isaac-sim/logs", "/root/.nvidia-omniverse/logs", False),
-                (root / "isaac-sim/data", "/root/.local/share/ov/data", False),
-                (root / "isaac-sim/documents", "/root/Documents", False),
-            ]
-        )
     args: list[str] = []
     for source, target, read_only in mounts:
         source = Path(source).expanduser()
@@ -277,11 +231,10 @@ def build(args: argparse.Namespace) -> None:
 
 def start(args: argparse.Namespace) -> None:
     docker_available()
-    include_isaac = using_isaac(args)
     if args.build and not image_exists(args.image):
         build(args)
     if not image_exists(args.image):
-        raise RuntimeError(f"Image does not exist: {args.image}. Run `python docker.py {args.variant} build` first.")
+        raise RuntimeError(f"Image does not exist: {args.image}. Run `python docker.py build` first.")
     if container_running(args.name):
         print(f"[INFO] Container is already running: {args.name}")
         return
@@ -309,10 +262,8 @@ def start(args: argparse.Namespace) -> None:
         "TORCH_HOME=/cache/torch",
         "-e",
         "MPLCONFIGDIR=/cache/matplotlib",
-        *mount_args(args.models, args.writable_models, include_isaac),
+        *mount_args(args.models, args.writable_models),
     ]
-    if include_isaac:
-        command.extend(["-e", "ACCEPT_EULA=Y", "-e", "PRIVACY_CONSENT=Y"])
     if args.display:
         command.extend(["-e", "DISPLAY", "--mount", f"type=bind,source={Path.home() / '.Xauthority'},target=/root/.Xauthority"])
         command.extend(["--mount", "type=bind,source=/tmp/.X11-unix,target=/tmp/.X11-unix"])
@@ -490,7 +441,7 @@ def run_workflow(args: argparse.Namespace) -> None:
     skip_stages = parse_skip_stages(args.skip)
 
     if not image_exists(args.image):
-        raise RuntimeError(f"Image does not exist: {args.image}. Run `python docker.py {args.variant} build` first.")
+        raise RuntimeError(f"Image does not exist: {args.image}. Run `python docker.py build` first.")
 
     started_container = False
     if container_running(args.name):
@@ -789,14 +740,6 @@ def verify(args: argparse.Namespace) -> None:
 
     checks = [
         (
-            "Isaac Lab Python (if present)",
-            "set -e; "
-            "if [ -d /workspace/IsaacLab ] || [ -d /workspace/isaaclab ]; then "
-            "if [ -d /workspace/IsaacLab ]; then cd /workspace/IsaacLab; else cd /workspace/isaaclab; fi; "
-            "./isaaclab.sh -p -c \"import sys; import isaaclab; print('isaaclab ok', sys.executable)\"; "
-            "else echo 'isaaclab skipped: not present in this image'; fi",
-        ),
-        (
             "hyworld2 env",
             "cd /workspace/hyworld2 && "
             "/opt/miniconda3/bin/conda run -n hyworld2 python -c "
@@ -948,56 +891,26 @@ def add_action_parsers(parser: argparse.ArgumentParser) -> None:
     run_parser.set_defaults(func=run_workflow)
 
 
-def apply_variant_defaults(args: argparse.Namespace) -> argparse.Namespace:
-    variant = args.variant
-    config = VARIANTS[variant]
+def apply_defaults(args: argparse.Namespace) -> argparse.Namespace:
     if args.image is None:
-        args.image = config["image"]
+        args.image = DEFAULT_IMAGE
     if args.name is None:
-        args.name = config["name"]
+        args.name = DEFAULT_CONTAINER
     if args.dockerfile is None:
-        args.dockerfile = config["dockerfile"]
+        args.dockerfile = DEFAULT_DOCKERFILE
     return args
-
-
-def normalize_legacy_args(argv: list[str]) -> list[str]:
-    if not argv or argv[0] in ("-h", "--help"):
-        return argv
-    value_options = {"--image", "--name", "--dockerfile"}
-    index = 0
-    while index < len(argv):
-        item = argv[index]
-        if item in value_options:
-            index += 2
-            continue
-        if any(item.startswith(f"{option}=") for option in value_options):
-            index += 1
-            continue
-        if item.startswith("-"):
-            index += 1
-            continue
-        if item in COMMANDS:
-            return [*argv[:index], DEFAULT_VARIANT, *argv[index:]]
-        return argv
-    return argv
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description=(
-            "Build and run HY-World containers. Use `python docker.py base build` "
-            "or `python docker.py isaac build` to choose the image variant."
-        )
+        description="Build and run the HY-World container."
     )
     parser.add_argument("--image", default=None)
     parser.add_argument("--name", default=None)
     parser.add_argument("--dockerfile", type=Path, default=None)
 
-    variant_parsers = parser.add_subparsers(dest="variant", required=True)
-    for variant in VARIANTS:
-        variant_parser = variant_parsers.add_parser(variant, help=f"Use the {variant} container image.")
-        add_action_parsers(variant_parser)
-    return apply_variant_defaults(parser.parse_args(normalize_legacy_args(sys.argv[1:])))
+    add_action_parsers(parser)
+    return apply_defaults(parser.parse_args())
 
 
 def main() -> None:

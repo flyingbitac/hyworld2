@@ -2,9 +2,7 @@ FROM nvcr.io/nvidia/cuda:12.8.0-devel-ubuntu24.04
 
 SHELL ["/bin/bash", "-lc"]
 
-# Base variant for HY-World worldgen without Isaac Lab / Isaac Sim. It uses the
-# same Ubuntu 24.04 + CUDA 12.8 family as the Isaac image's runtime needs, then
-# installs the same hyworld2 runtime environments as Dockerfile.isaac.
+# HY-World worldgen image based on Ubuntu 24.04 + CUDA 12.8.
 ARG MINICONDA_URL=https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
 ARG CONDA_DIR=/opt/miniconda3
 ARG CUDA_ARCH_LIST=12.0
@@ -14,8 +12,7 @@ ARG FLASH_ATTN_WHEEL_URL=https://github.com/mjun0812/flash-attention-prebuild-wh
 
 USER root
 
-# Match the important runtime defaults from nvcr.io/nvidia/isaac-lab plus the
-# hyworld2 model/cache defaults used by Dockerfile.isaac.
+# Runtime defaults for the hyworld2 model/cache layout.
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8
 ENV NVIDIA_VISIBLE_DEVICES=all
@@ -77,8 +74,7 @@ RUN wget -q "${MINICONDA_URL}" -O /tmp/miniconda.sh \
 COPY . ${HYWORLD_ROOT}
 WORKDIR ${HYWORLD_ROOT}
 
-# Main worldgen environment. Keep this in sync with Dockerfile.isaac except for
-# Isaac-specific dependencies.
+# Main worldgen environment.
 RUN set -euo pipefail \
     && "${CONDA_DIR}/bin/conda" create -y -n hyworld2 python=3.11.15 pip \
     && "${CONDA_DIR}/bin/conda" run -n hyworld2 python -m pip install --upgrade pip setuptools wheel \
@@ -106,7 +102,7 @@ RUN set -euo pipefail \
     fi \
     && "${CONDA_DIR}/bin/conda" clean -afy
 
-# Panorama/VLM environment, matching Dockerfile.isaac.
+# Panorama/VLM environment.
 RUN "${CONDA_DIR}/bin/conda" create -y -n hyworld2-pano python=3.10 pip \
     && "${CONDA_DIR}/bin/conda" run -n hyworld2-pano python -m pip install --upgrade pip setuptools wheel \
     && "${CONDA_DIR}/bin/conda" run -n hyworld2-pano python -m pip install \
@@ -157,8 +153,7 @@ ENV TORCH_HOME=/cache/torch
 ENV MPLCONFIGDIR=/cache/matplotlib
 ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
-# World-generation runtime defaults. These match Dockerfile.isaac so the base
-# image can run the same worldgen commands without extra environment exports.
+# World-generation runtime defaults.
 ENV HF_ENDPOINT=https://hf-mirror.com
 ENV SAM3_REPO_ID=/models/sam3
 ENV WORLDSTEREO_REPO=/models/WorldStereo
@@ -174,8 +169,7 @@ ENV WORLDMIRROR_NPROC_PER_NODE=1
 ENV WORLDMIRROR_TARGET_SIZE=512
 ENV WORLDMIRROR_CUDA_VISIBLE_DEVICES=0
 
-# The runtime user keeps HOME=/root to match the Isaac image. Make /root
-# writable so cupy/triton/transformers cache writes do not fail.
+# Make /root writable so cupy/triton/transformers cache writes do not fail.
 RUN chmod 777 /root
 
 # rtree: required by NavMesh reconstruction (--apply_recon_iteration, Stage 1).

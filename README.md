@@ -1,11 +1,6 @@
 ## Docker 容器用法与 Prompt 生成 3D 场景教程
 
-这份 fork 提供了两套 Docker 镜像：
-
-| 变体 | 镜像 | 容器名 | 适用场景 |
-|------|------|--------|----------|
-| `isaac` | `hyworld2-isaaclab:3.0.0-beta2` | `hyworld2-isaaclab` | 需要 Isaac Lab / Isaac Sim 运行时，或希望使用完整本地环境。 |
-| `base` | `hyworld2-base:3.0.0-beta2` | `hyworld2-base` | 不需要 Isaac 的普通 HY-World 推理、全景图和 3DGS 生成。 |
+这份 fork 提供一套 Docker 镜像：`hyworld2-base:3.0.0-beta2`，默认容器名为 `hyworld2-base`。
 
 论文把 HY-World 2.0 表述为支持 `text prompts`、`single-view images`、`multi-view images` 和 `videos` 等输入，并说明 HY-Pano 2.0 用于从文本或单视图图像生成全景图。本仓库当前开源的 `hyworld2/panogen` CLI/API 示例仍然是图像条件入口：`pipeline.py` 和 `pipeline_with_qwen_image.py` 都要求传入 `--image`，再用 `--prompt` 控制风格和内容。因此，本地从“纯文本 prompt”开始时，推荐先用 `flux2` 环境生成一张条件图，再把这张图交给 HY-Pano 生成 360 度全景图。
 
@@ -37,28 +32,19 @@
 ```bash
 cd /home/zxh/ws/hyworld2
 
-# Isaac 版本
-python docker.py isaac build
-python docker.py isaac start
-python docker.py isaac verify
-python docker.py isaac enter
-
-# 非 Isaac 版本，命令形态相同
-python docker.py base build
-python docker.py base start
-python docker.py base verify
-python docker.py base enter
+python docker.py build
+python docker.py start
+python docker.py verify
+python docker.py enter
 ```
 
 常用宿主机命令：
 
 ```bash
-python docker.py isaac status
-python docker.py isaac exec nvidia-smi
-python docker.py isaac stop
+python docker.py status
+python docker.py exec nvidia-smi
+python docker.py stop
 ```
-
-如果命令里省略 `base` / `isaac`，`docker.py` 默认使用 `base` 变体，例如 `python docker.py run ...` 等价于 `python docker.py base run ...`。
 
 ### 2. 下载模型
 
@@ -82,7 +68,7 @@ python docker.py download --path ./models --dry-run
 可以直接从宿主机启动完整 prompt -> 条件图 -> 全景图 -> 3DGS 流程。命令会自动进入对应容器执行各阶段，阶段开始时在终端打印 `[RUN] ...`，并透传容器内命令输出：
 
 ```bash
-python docker.py base run \
+python docker.py run \
   --prompt "a realistic sunny mountain village with stone paths, trees, and distant snow peaks" \
   --runname my_prompt_scene \
   --device 0,1
@@ -364,7 +350,7 @@ HY-World 2.0 is an **open-source state-of-the-art** world model.  We released al
 
 ### Why 3D World Models?
 
-Existing world models, such as Genie 3, Cosmos, and HY-World 1.5 (WorldPlay+WorldCompass), generate pixel-level videos — essentially "watching a movie" that vanishes once playback ends. **HY-World 2.0 takes a fundamentally different approach**: it directly produces editable, persistent 3D assets (meshes / 3DGS) that can be imported into game engines like Blender/Unity/Unreal Engine/Isaac Sim — more like "building a playable game" than recording a clip. This paradigm shift natively resolves many long-standing pain points of video world models:
+Existing world models, such as Genie 3, Cosmos, and HY-World 1.5 (WorldPlay+WorldCompass), generate pixel-level videos — essentially "watching a movie" that vanishes once playback ends. **HY-World 2.0 takes a fundamentally different approach**: it directly produces editable, persistent 3D assets (meshes / 3DGS) that can be imported into tools and engines like Blender/Unity/Unreal Engine — more like "building a playable game" than recording a clip. This paradigm shift natively resolves many long-standing pain points of video world models:
 
 |  | Video World Models | 3D World Model (HY-World 2.0) |
 |--|---|---|
@@ -374,7 +360,7 @@ Existing world models, such as Genie 3, Cosmos, and HY-World 1.5 (WorldPlay+Worl
 | **Real-Time Rendering** | Requires per-frame inference; high latency | Consumer GPUs can render in real time |
 | **Controllability** | Weak (imprecise character control, no real physics) | Precise — zero-error control, real physics collision, accurate lighting |
 | **Inference Cost** | Accumulates with every interaction | One-time generation; rendering cost ≈ 0 |
-| **Engine Compatibility** | ✗ Video files only | ✓ Directly importable into Blender / UE / Isaac Engine |
+| **Engine Compatibility** | ✗ Video files only | ✓ Directly importable into Blender / Unity / UE |
 | | $\color{IndianRed}{\textsf{Watch a video, then it's gone}}$ | $\color{RoyalBlue}{\textbf{Build a world, keep it forever}}$ |
 
 
@@ -395,7 +381,7 @@ Existing world models, such as Genie 3, Cosmos, and HY-World 1.5 (WorldPlay+Worl
 
 - **Real 3D Worlds, Not Just Videos**
 
-  Unlike video-only world models (e.g., Genie 3, HY World 1.5), HY-World 2.0 generates **real 3D assets** — 3DGS, meshes, and point clouds — that are freely explorable, editable, and directly importable into **Unity / Unreal Engine / Isaac**. From a single text prompt or image, create navigable 3D worlds with diverse styles: realistic, cartoon, game, and more.
+  Unlike video-only world models (e.g., Genie 3, HY World 1.5), HY-World 2.0 generates **real 3D assets** — 3DGS, meshes, and point clouds — that are freely explorable, editable, and directly importable into **Unity / Unreal Engine / Blender**. From a single text prompt or image, create navigable 3D worlds with diverse styles: realistic, cartoon, game, and more.
 
 <p align="center">
   <img src="assets/mesh_en.gif" width="95%">

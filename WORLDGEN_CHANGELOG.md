@@ -5,7 +5,7 @@
 ## 运行结论
 
 - 已跑通的有效路径：Stage3 使用 2 卡 WorldStereo + 单进程 WorldMirror，Stage4 使用 2 卡，Stage5 使用单卡 3DGS 并设置 `--ssim-lambda 0`。
-- FLUX.2 Klein 9B 验证已完成：`hyworld2-pano` 不能直接复用，因为它缺少新版 Diffusers 的 `Flux2KleinPipeline`；base/isaac 两个容器均新增并验证了独立 `flux2` conda 环境。当前 `docker.py` 只保留 9B 路径，text2img 和 HY-World Qwen img2pano 均已跑通。
+- FLUX.2 Klein 9B 验证已完成：`hyworld2-pano` 不能直接复用，因为它缺少新版 Diffusers 的 `Flux2KleinPipeline`；容器内新增并验证了独立 `flux2` conda 环境。当前 `docker.py` 只保留 9B 路径，text2img 和 HY-World Qwen img2pano 均已跑通。
 - `show_gs` 已能加载 `/workspace/hyworld2/examples/worldgen/case000/gs_results_single/ckpts/ckpt_3999_rank0.pt`。
 - Stage5 验证指标：PSNR `25.74`，SSIM `0.748`，LPIPS `0.302`，Gaussians `612349`。
 - Panogen Qwen-Image-Edit 已完成阶段级 GPU profile：fresh container 中使用 `--load-strategy balanced`，GPU0 峰值 `5489 MiB` / 平均利用率 `35.13%`，GPU1 峰值 `16453 MiB` / 平均利用率 `0.37%`。
@@ -22,19 +22,18 @@
 
 ## FLUX.2 Klein text2img + HY-World img2pano 验证
 
-目标是检查容器内是否已有环境可以跑 `black-forest-labs/FLUX.2-klein-9B`，并在 base / isaac 两套容器里分别验证 text2img 和 HY-World 自带 img2pano。结论如下：
+目标是检查容器内是否已有环境可以跑 `black-forest-labs/FLUX.2-klein-9B`，并验证 text2img 和 HY-World 自带 img2pano。结论如下：
 
 | 组合 | text2img 输出 | img2pano 输出 | 结果 |
 | --- | --- | --- | --- |
-| `base+9B` | `/tmp/flux2_klein_tests/base_9b/text2img.png`，`512x512` RGB，像素范围非空 | `/tmp/flux2_klein_tests/base_9b/pano_steps4.png`，`992x512` RGB，像素范围非空 | 通过 |
-| `isaac+9B` | `/tmp/flux2_klein_tests/isaac_9b/text2img.png`，`512x512` RGB，像素范围非空 | `/tmp/flux2_klein_tests/isaac_9b/pano_steps4.png`，`992x512` RGB，像素范围非空 | 通过 |
+| `9B` | `/tmp/flux2_klein_tests/base_9b/text2img.png`，`512x512` RGB，像素范围非空 | `/tmp/flux2_klein_tests/base_9b/pano_steps4.png`，`992x512` RGB，像素范围非空 | 通过 |
 
 环境结论：
 
 - `hyworld2` / `hyworld2-pano` 原有环境不适合直接跑 Klein：原先的 `hyworld2-pano` 使用 HY-Pano 依赖栈，未提供 `Flux2KleinPipeline`，并且强行升级 Diffusers 会污染 HY-Pano 依赖。
-- 已在 `Dockerfile.base` 和 `Dockerfile.isaac` 中新增独立 `flux2` 环境，安装 `torch==2.7.1+cu128`、Diffusers main、`transformers==4.57.1`、`accelerate`、`bitsandbytes` 等依赖。
-- 两个运行中容器的 `flux2` import check 均通过：`torch 2.7.1+cu128`、`diffusers 0.39.0.dev0`、`transformers 4.57.1`、`bitsandbytes 0.49.2`、`Flux2KleinPipeline`。
-- `hyworld2-base:3.0.0-beta2` 和 `hyworld2-isaaclab:3.0.0-beta2` 镜像 tag 已更新为包含 `flux2` 环境、`scripts/flux2_klein_text2img.py`、README 和本 changelog 的版本；从镜像直接 `docker run --rm --user root --entrypoint bash ...` 验证 `Flux2KleinPipeline` 导入和脚本 `--help` 均通过。
+- 已在 `Dockerfile` 中新增独立 `flux2` 环境，安装 `torch==2.7.1+cu128`、Diffusers main、`transformers==4.57.1`、`accelerate`、`bitsandbytes` 等依赖。
+- 容器的 `flux2` import check 通过：`torch 2.7.1+cu128`、`diffusers 0.39.0.dev0`、`transformers 4.57.1`、`bitsandbytes 0.49.2`、`Flux2KleinPipeline`。
+- `hyworld2-base:3.0.0-beta2` 镜像 tag 已更新为包含 `flux2` 环境、`scripts/flux2_klein_text2img.py`、README 和本 changelog 的版本；从镜像直接 `docker run --rm --user root --entrypoint bash ...` 验证 `Flux2KleinPipeline` 导入和脚本 `--help` 均通过。
 
 命令和参数结论：
 
@@ -54,10 +53,10 @@
 
 ```bash
 cd /home/zxh/ws/hyworld2
-python docker.py isaac build
-python docker.py isaac start
-python docker.py isaac verify
-python docker.py isaac enter
+python docker.py build
+python docker.py start
+python docker.py verify
+python docker.py enter
 ```
 
 进入容器后，先设置本次 scene 路径和 prompt。`INPUT_IMAGE` 换成你的条件图；输出的全景图固定保存为 `$SCENE/panorama.png`，后续 Stage1-5 都复用同一个 `$SCENE`。
@@ -222,17 +221,16 @@ CUDA_VISIBLE_DEVICES=0 /opt/miniconda3/bin/conda run --no-capture-output -n hywo
 
 | 类别 | 文件 / 参数 | 修改 | 目的 | 显存影响 |
 | --- | --- | --- | --- | --- |
-| 容器 | `Dockerfile.isaac` / `Dockerfile.base` | 拆分 Isaac Lab 版和 Ubuntu 24.04 + CUDA 12.8 base 版；base 版复用 hyworld2 / hyworld2-pano / worldgen runtime defaults，但不包含 Isaac Lab / Isaac Sim | 在不需要 Isaac 的场景中构建更基础的 HY-World runtime，同时保持 worldgen 功能与 Isaac 版一致 | 不是显存优化 |
-| 容器 | `Dockerfile.isaac` / `Dockerfile.base` | 新增 CUDA 12.8、conda 环境、worldgen 依赖、`requirements_git.txt` 源码安装 pytorch3d、rtree，并复用 `hyworld2-pano` 运行 VLM shim | 让镜像构建后具备 Stage1-Stage5 所需依赖 | 不是显存优化 |
-| 容器 | `Dockerfile.isaac` / `Dockerfile.base` | 安装 `requirements_git.txt` 时设置 `FORCE_CUDA=1 MAX_JOBS=4 CMAKE_BUILD_PARALLEL_LEVEL=4` | 确保 PyTorch3D 编译 CUDA rasterizer，避免 Stage1/2 点云渲染报 `Not compiled with GPU support`；限制编译并发避免 CPU 全满 | 不是显存优化；保证使用 GPU rasterization |
-| 容器 | `Dockerfile.isaac` / `Dockerfile.base` | 设置 `PIP_INDEX_URL=https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple`，并用 `mjun0812/flash-attention-prebuild-wheels` 的 `flash_attn-2.8.2+cu128torch2.7-cp311` wheel 替代源码编译 | 加速镜像构建，避免 flash-attn 本地 CUDA 编译占用大量 CPU | 不是显存优化；构建时间/CPU 优化 |
-| 容器 | `Dockerfile.isaac` / `Dockerfile.base` | 安装 `libglm-dev` | gsplat CUDA 扩展需要 `<glm/...>` 头文件；用系统包替代未跟踪的 30MB `csrc/third_party/glm` clone | 不是显存优化 |
-| 容器 | `Dockerfile.isaac` / `Dockerfile.base` | 默认 `HF_HOME=/models/.cache/huggingface`、`HUGGINGFACE_HUB_CACHE=/models/.cache/huggingface/hub` | 使用只读模型挂载中的预下载权重，避免运行时下载 | 不是显存优化 |
-| 容器 | `Dockerfile.isaac` / `Dockerfile.base` | 默认 `SAM3_REPO_ID=/models/sam3`、`WORLDSTEREO_REPO=/models/WorldStereo`、`WORLDMIRROR_MODEL=/models/HY-World-2.0`、`CAMERA_SELECTOR_MODEL=facebook/dinov2-base` | 消除运行 Stage1/3 时必须手动指定本地模型路径的问题 | 不是显存优化 |
-| 容器 | `Dockerfile.isaac` / `Dockerfile.base` | 默认 `WS_TEXT_DTYPE=bf16`、`WS_AUX_OFFLOAD=1`、`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` | 将低显存 WorldStereo 路径固化为容器默认 | UMT5 注释记录约 `25 -> 12.5 GiB/card`；MoGe/SAM3 offload 日志中 WorldStereo 前常驻约 `21.3 GiB/card` |
-| 容器 | `Dockerfile.isaac` / `Dockerfile.base` | 默认 `WORLDMIRROR_NPROC_PER_NODE=1`、`WORLDMIRROR_TARGET_SIZE=512`、`WORLDMIRROR_CUDA_VISIBLE_DEVICES=0` | 避开 2 卡 FSDP WorldMirror 在 291 张图、832 target size 上的 NCCL/CUDA illegal memory access | 失败路径 OOM/illegal memory；单卡 512 profile 峰值 `14081 MiB` |
+| 容器 | `Dockerfile` | 新增 CUDA 12.8、conda 环境、worldgen 依赖、`requirements_git.txt` 源码安装 pytorch3d、rtree，并复用 `hyworld2-pano` 运行 VLM shim | 让镜像构建后具备 Stage1-Stage5 所需依赖 | 不是显存优化 |
+| 容器 | `Dockerfile` | 安装 `requirements_git.txt` 时设置 `FORCE_CUDA=1 MAX_JOBS=4 CMAKE_BUILD_PARALLEL_LEVEL=4` | 确保 PyTorch3D 编译 CUDA rasterizer，避免 Stage1/2 点云渲染报 `Not compiled with GPU support`；限制编译并发避免 CPU 全满 | 不是显存优化；保证使用 GPU rasterization |
+| 容器 | `Dockerfile` | 设置 `PIP_INDEX_URL=https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple`，并用 `mjun0812/flash-attention-prebuild-wheels` 的 `flash_attn-2.8.2+cu128torch2.7-cp311` wheel 替代源码编译 | 加速镜像构建，避免 flash-attn 本地 CUDA 编译占用大量 CPU | 不是显存优化；构建时间/CPU 优化 |
+| 容器 | `Dockerfile` | 安装 `libglm-dev` | gsplat CUDA 扩展需要 `<glm/...>` 头文件；用系统包替代未跟踪的 30MB `csrc/third_party/glm` clone | 不是显存优化 |
+| 容器 | `Dockerfile` | 默认 `HF_HOME=/models/.cache/huggingface`、`HUGGINGFACE_HUB_CACHE=/models/.cache/huggingface/hub` | 使用只读模型挂载中的预下载权重，避免运行时下载 | 不是显存优化 |
+| 容器 | `Dockerfile` | 默认 `SAM3_REPO_ID=/models/sam3`、`WORLDSTEREO_REPO=/models/WorldStereo`、`WORLDMIRROR_MODEL=/models/HY-World-2.0`、`CAMERA_SELECTOR_MODEL=facebook/dinov2-base` | 消除运行 Stage1/3 时必须手动指定本地模型路径的问题 | 不是显存优化 |
+| 容器 | `Dockerfile` | 默认 `WS_TEXT_DTYPE=bf16`、`WS_AUX_OFFLOAD=1`、`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` | 将低显存 WorldStereo 路径固化为容器默认 | UMT5 注释记录约 `25 -> 12.5 GiB/card`；MoGe/SAM3 offload 日志中 WorldStereo 前常驻约 `21.3 GiB/card` |
+| 容器 | `Dockerfile` | 默认 `WORLDMIRROR_NPROC_PER_NODE=1`、`WORLDMIRROR_TARGET_SIZE=512`、`WORLDMIRROR_CUDA_VISIBLE_DEVICES=0` | 避开 2 卡 FSDP WorldMirror 在 291 张图、832 target size 上的 NCCL/CUDA illegal memory access | 失败路径 OOM/illegal memory；单卡 512 profile 峰值 `14081 MiB` |
 | 容器启动 | `docker.py` | 不再把 `HF_HOME` / hub cache 覆盖到 `/cache/huggingface` | 保持 Dockerfile 默认的 `/models/.cache/huggingface`，否则 Wan/MoGe/SAM3/WorldStereo 解析会失败 | 不是显存优化 |
-| 容器启动 | `docker.py` | 新增 `python docker.py isaac ...` / `python docker.py base ...` 镜像族入口；旧的 `python docker.py build` 仍兼容为 Isaac 默认；base 入口跳过 Isaac EULA env 和 Isaac/Omniverse cache mounts | 让 Isaac 版和 base 版共用同一启动脚本，但后续命令按已选择的镜像族自动操作对应 image/container/Dockerfile | 不是显存优化 |
+| 容器启动 | `docker.py` | 保留单一 `python docker.py ...` 命令入口，默认镜像为 `hyworld2-base:3.0.0-beta2` | 降低镜像选择和容器启动复杂度 | 不是显存优化 |
 | 容器启动 | `docker.py verify` | 新增 PyTorch3D CUDA rasterizer runtime check，并显式校验 worldgen runtime env defaults | import check 无法发现 CPU-only PyTorch3D；runtime env check 确认 Dockerfile 构建出的容器无需手工再设置本地模型路径和低显存参数 | 不是显存优化 |
 | 离线模型 | `worldstereo_wrapper.py` | `_resolve_local_snapshot()` 将 Wan base model repo id 解析到本地 HF snapshot | 避免离线/镜像环境下 diffusers 尝试访问 Hugging Face | 不是显存优化 |
 | WorldStereo | `worldstereo_wrapper.py` | `WS_TEXT_DTYPE=bf16` 控制 UMT5/CLIP 加载 dtype | 降低文本和图像编码器权重占用 | 组件估算：UMT5 约节省 `12.5 GiB/card`，CLIP 约减半；需保留全流程实测 |
@@ -322,14 +320,14 @@ Stage5 profile 输出质量指标：
 - 第二次重建进展：CUDA 12.8、`hyworld2`、`hyworld2-pano`、gsplat、flash-attn、pytorch3d、MoGe、fused-ssim、rtree 和 build-time import checks 均通过。
 - 第二次重建失败点：Dockerfile 后置层尝试从清华 PyPI 镜像 `pip install --force-reinstall pytorch3d`，但 PyPI 没有 `pytorch3d` 包。该层与前面已成功执行的 `requirements_git.txt` 源码安装重复，已删除。
 - 第三次重建中止点：Dockerfile 的 VLM shim 层注释声称使用 transformers shim，但实际执行 `pip install vllm`。这会重新引入已拒绝的 vLLM/FlashInfer/torch 版本风险并显著增加镜像体积，已改为由 `scripts/launch_vlm.sh` 直接使用镜像内 `hyworld2-pano` 环境运行 `scripts/vlm_server.py`。
-- 第四次重建成功：`docker build` 产出 `hyworld2-isaaclab:3.0.0-beta2`，build-time import checks 通过：`hyworld2` 环境可导入 `torch/diffusers/transformers/recast/gsplat/worldrecon.pipeline`，`hyworld2-pano` 环境可导入 `pipeline/pipeline_with_qwen_image`。
-- Fresh container 验证成功：`python docker.py isaac stop && python docker.py isaac start && python docker.py isaac verify` 通过；`docker.py verify` 会显式断言容器内 `HF_HOME=/models/.cache/huggingface`、`HUGGINGFACE_HUB_CACHE=/models/.cache/huggingface/hub`、`HF_ENDPOINT=https://hf-mirror.com`、`SAM3_REPO_ID=/models/sam3`、`WORLDSTEREO_REPO=/models/WorldStereo`、`WORLDMIRROR_MODEL=/models/HY-World-2.0`、`WS_TEXT_DTYPE=bf16`、`WS_AUX_OFFLOAD=1`、`WORLDMIRROR_NPROC_PER_NODE=1`、`WORLDMIRROR_TARGET_SIZE=512`、`WORLDMIRROR_CUDA_VISIBLE_DEVICES=0` 均为默认值。
+- 第四次重建成功：`docker build` 产出 `hyworld2-base:3.0.0-beta2`，build-time import checks 通过：`hyworld2` 环境可导入 `torch/diffusers/transformers/recast/gsplat/worldrecon.pipeline`，`hyworld2-pano` 环境可导入 `pipeline/pipeline_with_qwen_image`。
+- Fresh container 验证成功：`python docker.py stop && python docker.py start && python docker.py verify` 通过；`docker.py verify` 会显式断言容器内 `HF_HOME=/models/.cache/huggingface`、`HUGGINGFACE_HUB_CACHE=/models/.cache/huggingface/hub`、`HF_ENDPOINT=https://hf-mirror.com`、`SAM3_REPO_ID=/models/sam3`、`WORLDSTEREO_REPO=/models/WorldStereo`、`WORLDMIRROR_MODEL=/models/HY-World-2.0`、`WS_TEXT_DTYPE=bf16`、`WS_AUX_OFFLOAD=1`、`WORLDMIRROR_NPROC_PER_NODE=1`、`WORLDMIRROR_TARGET_SIZE=512`、`WORLDMIRROR_CUDA_VISIBLE_DEVICES=0` 均为默认值。
 - VLM shim 轻量验证成功：`hyworld2-pano` 环境可导入 `fastapi`、`uvicorn`、`AutoModelForImageTextToText`、`AutoProcessor`；未在验证中加载完整 Qwen3-VL 权重。
-- 第五次重建成功：Dockerfile 使用清华 PyPI 镜像和预编译 flash-attn wheel 后，`docker build` 成功产出 `hyworld2-isaaclab:3.0.0-beta2`；日志确认 `flash-attn-2.8.2+cu128torch2.7` 由 wheel 安装成功，`requirements_git.txt`、PyTorch3D CUDA build、navmesh 和 build-time import checks 均通过。
-- Fresh container GPU rasterizer 验证成功：`python docker.py isaac stop && python docker.py isaac start && python docker.py isaac verify` 通过，`PyTorch3D CUDA rasterizer` runtime check 输出 `pytorch3d cuda rasterizer ok (1, 4, 4, 2)`。
-- Base 镜像构建成功：`python docker.py base build` 产出 `hyworld2-base:3.0.0-beta2`；base 容器和 Isaac 容器均为 Ubuntu `24.04`、CUDA `12.8` compiler build；base build-time import checks 通过 `hyworld2` / `hyworld2-pano`。
-- Base fresh container 验证成功：`python docker.py base stop && python docker.py base start && python docker.py base verify` 通过；Isaac check 正确输出 `isaaclab skipped`，`hyworld2` / `hyworld2-pano` 均看到 CUDA，PyTorch3D CUDA rasterizer 输出 `pytorch3d cuda rasterizer ok (1, 4, 4, 2)`，模型挂载 `/models` 正常。
-- Base 图生场景短冒烟成功：在 `hyworld2-base` 中启动 README 的 `pipeline_with_qwen_image.py` 条件图 + prompt 入口，使用 `/models/Qwen/Qwen-Image-Edit-2509` 和 `/models/HY-World-2.0/HY-Pano-2.0`，`--num-inference-steps 1`；观察到 GPU0 显存占用约 `15371 MiB` 后按要求停止，进程清理后 GPU 显存恢复。
+- 第五次重建成功：Dockerfile 使用清华 PyPI 镜像和预编译 flash-attn wheel 后，`docker build` 成功产出 `hyworld2-base:3.0.0-beta2`；日志确认 `flash-attn-2.8.2+cu128torch2.7` 由 wheel 安装成功，`requirements_git.txt`、PyTorch3D CUDA build、navmesh 和 build-time import checks 均通过。
+- Fresh container GPU rasterizer 验证成功：`python docker.py stop && python docker.py start && python docker.py verify` 通过，`PyTorch3D CUDA rasterizer` runtime check 输出 `pytorch3d cuda rasterizer ok (1, 4, 4, 2)`。
+- 镜像构建成功：`python docker.py build` 产出 `hyworld2-base:3.0.0-beta2`；容器为 Ubuntu `24.04`、CUDA `12.8` compiler build；build-time import checks 通过 `hyworld2` / `hyworld2-pano`。
+- Fresh container 验证成功：`python docker.py stop && python docker.py start && python docker.py verify` 通过；`hyworld2` / `hyworld2-pano` 均看到 CUDA，PyTorch3D CUDA rasterizer 输出 `pytorch3d cuda rasterizer ok (1, 4, 4, 2)`，模型挂载 `/models` 正常。
+- 图生场景短冒烟成功：在 `hyworld2-base` 中启动 README 的 `pipeline_with_qwen_image.py` 条件图 + prompt 入口，使用 `/models/Qwen/Qwen-Image-Edit-2509` 和 `/models/HY-World-2.0/HY-Pano-2.0`，`--num-inference-steps 1`；观察到 GPU0 显存占用约 `15371 MiB` 后按要求停止，进程清理后 GPU 显存恢复。
 - Fresh container Panogen profile 验证成功：`pipeline_with_qwen_image.py` 使用 `/models/Qwen/Qwen-Image-Edit-2509` 和 `/models/HY-World-2.0/HY-Pano-2.0`，`--load-strategy balanced`，40 steps 返回码 `0`，输出 `1920 x 960` PNG。总耗时 `718.449s`；GPU0 峰值 `5489 MiB`、平均利用率 `35.13%`，GPU1 峰值 `16453 MiB`、平均利用率 `0.37%`。日志出现 diffusers 后处理 `invalid value encountered in cast` warning，输出文件仅作为 profile 验证产物未纳入 git。
 - Fresh container Stage1 profile 验证成功：用刚构建的镜像启动的容器运行 `traj_generate.py --apply_nav_traj --apply_up_route --apply_recon_iteration --skip_exist`，返回码 `0`；GPU0 峰值 `9801 MiB`、平均利用率 `13.28%`，GPU1 峰值 `3 MiB`、平均利用率 `0.00%`。
 - Fresh container Stage1 true-VLM profile 验证成功：在容器 `/tmp/hyworld_stage1_vlm` 复制 case000 `panorama.png` 后启动 `scripts/launch_vlm.sh`，运行 `traj_generate.py --apply_nav_traj --apply_up_route --apply_recon_iteration --force_vlm`，返回码 `0`；完成 meta information VLM labeling、objects VLM labeling、SAM3 segmentation、navmesh path planning、aerial route 和 recon eloop。总耗时 `88.747s`；GPU0 峰值 `11213 MiB`、平均利用率 `8.15%`，GPU1 峰值 `17995 MiB`、平均利用率 `2.20%`。临时 scene 约 `958MB`，已从容器 `/tmp` 删除。
