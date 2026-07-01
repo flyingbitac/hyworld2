@@ -10,6 +10,7 @@ from typing import Dict, List, Optional, Tuple, Union
 import imageio
 import numpy as np
 import torch
+import torch.distributed as torch_dist
 import torch.nn.functional as F
 import tqdm
 import tyro
@@ -1422,13 +1423,11 @@ class Runner:
 
                 # gather all results
                 if self.world_size > 1:
-                    import torch.distributed as dist
-
                     # Step 1: Synchronize per-rank Gaussian counts (they diverge
                     # after densify/prune, especially with MaskGaussian pruning).
                     local_n = torch.tensor([means.shape[0]], dtype=torch.long, device=means.device)
                     all_n = [torch.zeros(1, dtype=torch.long, device=means.device) for _ in range(self.world_size)]
-                    dist.all_gather(all_n, local_n)
+                    torch_dist.all_gather(all_n, local_n)
                     all_n = [int(n.item()) for n in all_n]
                     max_n = max(all_n)
                     total_n = sum(all_n)
@@ -1457,7 +1456,7 @@ class Runner:
                             ]
                         else:
                             gathered = None
-                        dist.gather(tensor_padded, gathered, dst=0)
+                        torch_dist.gather(tensor_padded, gathered, dst=0)
                         if self.world_rank == 0:
                             return torch.cat([g[:n] for g, n in zip(gathered, all_n)], dim=0)
                         return None
@@ -1713,7 +1712,8 @@ class Runner:
                                 o3d.io.write_triangle_mesh(
                                     f"{self.ply_dir}/fuse_simplified.ply", mesh_simplified)
 
-                    dist.barrier()
+                    if torch_dist.is_available() and torch_dist.is_initialized():
+                        torch_dist.barrier()
 
             # Turn Gradients into Sparse Tensor before running optimizer
             if cfg.sparse_grad:
@@ -1992,9 +1992,6 @@ class Runner:
         self.is_training = False
         cfg = self.cfg
         device = self.device
-        dist = None
-        if self.world_size > 1:
-            import torch.distributed as dist
 
         camtoworlds_all = self.parser.camtoworlds[5:-23]
         if cfg.render_traj_path == "interp":
@@ -2077,8 +2074,8 @@ class Runner:
                 f"Unexpected canvas shape: {canvas.shape}, expected (H, W, 3)"
             frames.append(canvas)
 
-        if dist is not None and dist.is_available() and dist.is_initialized():
-            dist.barrier()
+        if torch_dist.is_available() and torch_dist.is_initialized():
+            torch_dist.barrier()
 
         if not is_writer_rank:
             return
