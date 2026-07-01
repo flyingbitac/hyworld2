@@ -255,11 +255,23 @@ class _WorldStereoCommonMixin:
             torch.cuda.empty_cache()
         return self
 
+    def enable_group_stream_cpu_offload(self, device):
+        self._ws_group_stream_cpu_offload = True
+        self._ws_group_stream_offload_device = torch.device(device)
+        return self
+
     def _using_block_cpu_offload(self) -> bool:
         return bool(getattr(self, "_ws_block_cpu_offload", False))
 
+    def _using_group_stream_cpu_offload(self) -> bool:
+        return bool(getattr(self, "_ws_group_stream_cpu_offload", False))
+
     def _block_cpu_offload_device(self) -> torch.device:
         device = getattr(self, "_ws_block_offload_device", torch.device("cuda"))
+        return device if isinstance(device, torch.device) else torch.device(device)
+
+    def _group_stream_cpu_offload_device(self) -> torch.device:
+        device = getattr(self, "_ws_group_stream_offload_device", torch.device("cuda"))
         return device if isinstance(device, torch.device) else torch.device(device)
 
     @staticmethod
@@ -292,15 +304,15 @@ class _WorldStereoCommonMixin:
         self._move_root_tensor_attrs_for_block_offload(("scale_shift_table",), device)
 
     @staticmethod
-    def _move_tensor_tree_for_block_offload(value, device):
+    def _move_tensor_tree_to_device(value, device):
         if torch.is_tensor(value):
             return value.to(device)
         if isinstance(value, tuple):
-            return tuple(_WorldStereoCommonMixin._move_tensor_tree_for_block_offload(v, device) for v in value)
+            return tuple(_WorldStereoCommonMixin._move_tensor_tree_to_device(v, device) for v in value)
         if isinstance(value, list):
-            return [_WorldStereoCommonMixin._move_tensor_tree_for_block_offload(v, device) for v in value]
+            return [_WorldStereoCommonMixin._move_tensor_tree_to_device(v, device) for v in value]
         if isinstance(value, dict):
-            return {k: _WorldStereoCommonMixin._move_tensor_tree_for_block_offload(v, device) for k, v in value.items()}
+            return {k: _WorldStereoCommonMixin._move_tensor_tree_to_device(v, device) for k, v in value.items()}
         return value
 
     def _run_controlnet_block_cpu_offload(
@@ -319,9 +331,9 @@ class _WorldStereoCommonMixin:
 
         device = self._block_cpu_offload_device()
         controlnet = self.controlnet
-        add_infos = self._move_tensor_tree_for_block_offload(add_infos, device)
+        add_infos = self._move_tensor_tree_to_device(add_infos, device)
         controlnet_inputs = controlnet_inputs.to(device)
-        controlnet_rotary_emb = self._move_tensor_tree_for_block_offload(controlnet_rotary_emb, device)
+        controlnet_rotary_emb = self._move_tensor_tree_to_device(controlnet_rotary_emb, device)
         temb = temb.to(device)
 
         controlnet.proj_in.to(device)
@@ -741,15 +753,31 @@ class WorldStereoRefSModel(_WorldStereoCommonMixin, WanTransformer3DModel):
         :param camera_embedding: [b,6,f,h,w]
         """
         block_offload = self._using_block_cpu_offload()
-        if block_offload:
+        group_stream_offload = self._using_group_stream_cpu_offload()
+        if block_offload or group_stream_offload:
             if torch.is_grad_enabled():
-                raise RuntimeError("WorldStereo block CPU offload is inference-only.")
+                raise RuntimeError("WorldStereo CPU offload is inference-only.")
             if self.sp_size > 1:
-                raise RuntimeError("WorldStereo block CPU offload is only supported without sequence parallelism.")
-            block_offload_device = self._block_cpu_offload_device()
-            self._move_core_modules_for_block_offload(block_offload_device)
+                raise RuntimeError("WorldStereo CPU offload is only supported without sequence parallelism.")
+            offload_device = (
+                self._block_cpu_offload_device()
+                if block_offload
+                else self._group_stream_cpu_offload_device()
+            )
+            self._move_core_modules_for_block_offload(offload_device)
+            hidden_states = self._move_tensor_tree_to_device(hidden_states, offload_device)
+            timestep = self._move_tensor_tree_to_device(timestep, offload_device)
+            encoder_hidden_states = self._move_tensor_tree_to_device(encoder_hidden_states, offload_device)
+            encoder_hidden_states_image = self._move_tensor_tree_to_device(encoder_hidden_states_image, offload_device)
+            render_latent = self._move_tensor_tree_to_device(render_latent, offload_device)
+            render_mask = self._move_tensor_tree_to_device(render_mask, offload_device)
+            reference_latent = self._move_tensor_tree_to_device(reference_latent, offload_device)
+            camera_embedding = self._move_tensor_tree_to_device(camera_embedding, offload_device)
+            ref_index = self._move_tensor_tree_to_device(ref_index, offload_device)
+            camera_qt = self._move_tensor_tree_to_device(camera_qt, offload_device)
+            camera_qt_ref = self._move_tensor_tree_to_device(camera_qt_ref, offload_device)
         else:
-            block_offload_device = None
+            offload_device = None
         parallel_dims = get_parallel_state()
         attention_kwargs, lora_scale = self._prepare_lora_scale(attention_kwargs, use_rank0_warning=True)
 
@@ -882,7 +910,7 @@ class WorldStereoRefSModel(_WorldStereoCommonMixin, WanTransformer3DModel):
         ref_states = reference_latent
         for i, block in enumerate(self.blocks):
             if block_offload:
-                block.to(block_offload_device)
+                block.to(offload_device)
             if torch.is_grad_enabled() and self.gradient_checkpointing:
                 hidden_states, ref_states = self._gradient_checkpointing_func(
                     block, hidden_states,

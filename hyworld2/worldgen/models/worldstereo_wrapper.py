@@ -256,6 +256,7 @@ class WorldStereo:
         elif offload_mode == "group-stream":
             rank0_log("Enabling Diffusers streamed group CPU offload for WorldStereo.")
             cls._install_group_stream_offload(transformer, device)
+            transformer.enable_group_stream_cpu_offload(device)
             cls._install_encode_aware_offload(pipeline, device)
         elif os.environ.get("WS_AUX_OFFLOAD", "0") == "1" and not fsdp:
             # Non-FSDP lazy offload only. Under FSDP, _load_aux passes CPUOffloadPolicy
@@ -279,18 +280,21 @@ class WorldStereo:
             record_stream=True,
         )
 
-        controlnet = getattr(transformer, "controlnet", None)
-        has_controlnet = controlnet is not None
-        if has_controlnet:
-            delattr(transformer, "controlnet")
+        detached_modules = {}
+        for name in ("controlnet", "camera_embedding"):
+            module = getattr(transformer, name, None)
+            if module is not None:
+                detached_modules[name] = module
+                delattr(transformer, name)
         try:
             apply_group_offloading(transformer, **kwargs)
         finally:
-            if has_controlnet:
-                transformer.controlnet = controlnet
+            for name, module in detached_modules.items():
+                setattr(transformer, name, module)
 
-        if has_controlnet:
-            apply_group_offloading(transformer.controlnet, **kwargs)
+        controlnet = detached_modules.get("controlnet")
+        if controlnet is not None:
+            apply_group_offloading(controlnet, **kwargs)
             rank0_log("Diffusers group offload installed for transformer blocks and ControlNet blocks.")
         else:
             rank0_log("Diffusers group offload installed for transformer blocks.")

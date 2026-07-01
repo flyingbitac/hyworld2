@@ -181,15 +181,15 @@ class RefKFDMDGeneratorPipeline(KeyframePipelineMixin, DiffusionPipeline, WanLor
 
         # Encode image embedding
         transformer_dtype = self.transformer.dtype
-        prompt_embeds = prompt_embeds.to(transformer_dtype)
+        prompt_embeds = prompt_embeds.to(device=device, dtype=transformer_dtype)
         if negative_prompt_embeds is not None:
-            negative_prompt_embeds = negative_prompt_embeds.to(transformer_dtype)
+            negative_prompt_embeds = negative_prompt_embeds.to(device=device, dtype=transformer_dtype)
 
         if image_embeds is None:
             with torch.no_grad():
                 image_embeds = self.encode_image(image, device)
         image_embeds = image_embeds.repeat(batch_size, 1, 1)
-        image_embeds = image_embeds.to(transformer_dtype)
+        image_embeds = image_embeds.to(device=device, dtype=transformer_dtype)
 
         # 4. Prepare timesteps 0%
         if mode == "train":  # random selection during training, return all steps during inference
@@ -226,7 +226,7 @@ class RefKFDMDGeneratorPipeline(KeyframePipelineMixin, DiffusionPipeline, WanLor
         ### 5.5 Prepare keyframe render_latent ###
         with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16, enabled=True):
             # Explicitly cast to VAE weight dtype to avoid input/bias dtype mismatch under autocast
-            render_video = render_video.to(dtype=self.vae.dtype)
+            render_video = render_video.to(device=device, dtype=self.vae.dtype)
             if render_video.shape[2] == num_frames // 4 + 1:  # process with divided 21 frames
                 render_latent = keyframe_vae_encode(self.vae, render_video, rescale=True,
                                                     use_compile=self.vae_compile, compile_mode=self.vae_compile_mode)
@@ -245,6 +245,7 @@ class RefKFDMDGeneratorPipeline(KeyframePipelineMixin, DiffusionPipeline, WanLor
         # Prepare reference_latent
         with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16, enabled=True):
             if reference_video is not None:
+                reference_video = reference_video.to(device=device, dtype=self.vae.dtype)
                 reference_latent = keyframe_vae_encode(self.vae, reference_video, rescale=True,
                                                        use_compile=self.vae_compile, compile_mode=self.vae_compile_mode)
                 reference_latent_mask = torch.ones_like(reference_latent[:, :4]).to(reference_latent.dtype).to(reference_latent.device)
@@ -257,7 +258,7 @@ class RefKFDMDGeneratorPipeline(KeyframePipelineMixin, DiffusionPipeline, WanLor
         self._num_timesteps = len(timesteps)
 
         # Pre-convert condition to transformer dtype (avoid repeated conversion in loop)
-        condition = condition.to(transformer_dtype)
+        condition = condition.to(device=device, dtype=transformer_dtype)
         
         # Pre-expand all timesteps (avoid repeated expand in loop)
         expanded_timesteps = [t.expand(latents.shape[0]).to(device) for t in timesteps]
