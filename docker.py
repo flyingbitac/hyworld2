@@ -16,7 +16,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parent
-DEFAULT_IMAGE = "hyworld2-base:3.0.0-beta2"
+DEFAULT_IMAGE = "hyworld2-base:v1.0"
 DEFAULT_CONTAINER = "hyworld2-base"
 DEFAULT_DOCKERFILE = Path("Dockerfile")
 DEFAULT_MODELS = REPO_ROOT / "models"

@@ -1,6 +1,6 @@
 ## Docker 容器用法与 Prompt 生成 3D 场景教程
 
-这份 fork 提供一套 Docker 镜像：`hyworld2-base:3.0.0-beta2`，默认容器名为 `hyworld2-base`。
+这份 fork 提供一套 Docker 镜像：`hyworld2-base:v1.0`，默认容器名为 `hyworld2-base`。
 
 论文把 HY-World 2.0 表述为支持 `text prompts`、`single-view images`、`multi-view images` 和 `videos` 等输入，并说明 HY-Pano 2.0 用于从文本或单视图图像生成全景图。本仓库当前开源的 `hyworld2/panogen` CLI/API 示例仍然是图像条件入口：`pipeline.py` 和 `pipeline_with_qwen_image.py` 都要求传入 `--image`，再用 `--prompt` 控制风格和内容。因此，本地从“纯文本 prompt”开始时，推荐先用 `flux2` 环境生成一张条件图，再把这张图交给 HY-Pano 生成 360 度全景图。
 
@@ -32,7 +32,7 @@
 ```bash
 cd /home/zxh/ws/hyworld2
 
-# 已发布镜像路径：拉取后会自动 retag 为 hyworld2-base:3.0.0-beta2
+# 已发布镜像路径：拉取后会自动 retag 为 hyworld2-base:v1.0
 python docker.py pull
 
 # 或者本机从 Dockerfile 构建

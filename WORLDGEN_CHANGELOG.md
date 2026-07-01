@@ -33,7 +33,7 @@
 - `hyworld2` / `hyworld2-pano` 原有环境不适合直接跑 Klein：原先的 `hyworld2-pano` 使用 HY-Pano 依赖栈，未提供 `Flux2KleinPipeline`，并且强行升级 Diffusers 会污染 HY-Pano 依赖。
 - 已在 `Dockerfile` 中新增独立 `flux2` 环境，安装 `torch==2.7.1+cu128`、Diffusers main、`transformers==4.57.1`、`accelerate`、`bitsandbytes` 等依赖。
 - 容器的 `flux2` import check 通过：`torch 2.7.1+cu128`、`diffusers 0.39.0.dev0`、`transformers 4.57.1`、`bitsandbytes 0.49.2`、`Flux2KleinPipeline`。
-- `hyworld2-base:3.0.0-beta2` 镜像 tag 已更新为包含 `flux2` 环境、`scripts/flux2_klein_text2img.py`、README 和本 changelog 的版本；从镜像直接 `docker run --rm --user root --entrypoint bash ...` 验证 `Flux2KleinPipeline` 导入和脚本 `--help` 均通过。
+- `hyworld2-base:v1.0` 镜像 tag 已更新为包含 `flux2` 环境、`scripts/flux2_klein_text2img.py`、README 和本 changelog 的版本；从镜像直接 `docker run --rm --user root --entrypoint bash ...` 验证 `Flux2KleinPipeline` 导入和脚本 `--help` 均通过。
 
 命令和参数结论：
 
@@ -231,8 +231,8 @@ CUDA_VISIBLE_DEVICES=0 /opt/miniconda3/bin/conda run --no-capture-output -n hywo
 | 容器 | `Dockerfile` | 默认 `WS_TEXT_DTYPE=bf16`、`WS_AUX_OFFLOAD=1`、`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` | 将低显存 WorldStereo 路径固化为容器默认 | UMT5 注释记录约 `25 -> 12.5 GiB/card`；MoGe/SAM3 offload 日志中 WorldStereo 前常驻约 `21.3 GiB/card` |
 | 容器 | `Dockerfile` | 默认 `WORLDMIRROR_NPROC_PER_NODE=1`、`WORLDMIRROR_TARGET_SIZE=512`、`WORLDMIRROR_CUDA_VISIBLE_DEVICES=0` | 避开 2 卡 FSDP WorldMirror 在 291 张图、832 target size 上的 NCCL/CUDA illegal memory access | 失败路径 OOM/illegal memory；单卡 512 profile 峰值 `14081 MiB` |
 | 容器启动 | `docker.py` | 不再把 `HF_HOME` / hub cache 覆盖到 `/cache/huggingface` | 保持 Dockerfile 默认的 `/models/.cache/huggingface`，否则 Wan/MoGe/SAM3/WorldStereo 解析会失败 | 不是显存优化 |
-| 容器启动 | `docker.py` | 保留单一 `python docker.py ...` 命令入口，默认镜像为 `hyworld2-base:3.0.0-beta2` | 降低镜像选择和容器启动复杂度 | 不是显存优化 |
-| 容器启动 | `docker.py pull` | 从 `crpi-jq3nu6qbricb9zcb.cn-beijing.personal.cr.aliyuncs.com/zxh_in_bitac/hyworld2:<tag>` 拉取镜像，并默认 retag 为本地 `hyworld2-base:3.0.0-beta2` | 允许直接使用已发布镜像，不必每台机器本地编译 | 不是显存优化 |
+| 容器启动 | `docker.py` | 保留单一 `python docker.py ...` 命令入口，默认镜像为 `hyworld2-base:v1.0` | 降低镜像选择和容器启动复杂度 | 不是显存优化 |
+| 容器启动 | `docker.py pull` | 从 `crpi-jq3nu6qbricb9zcb.cn-beijing.personal.cr.aliyuncs.com/zxh_in_bitac/hyworld2:<tag>` 拉取镜像，并默认 retag 为本地 `hyworld2-base:v1.0` | 允许直接使用已发布镜像，不必每台机器本地编译 | 不是显存优化 |
 | 容器启动 | `docker.py verify` | 新增 PyTorch3D CUDA rasterizer runtime check，并显式校验 worldgen runtime env defaults | import check 无法发现 CPU-only PyTorch3D；runtime env check 确认 Dockerfile 构建出的容器无需手工再设置本地模型路径和低显存参数 | 不是显存优化 |
 | 离线模型 | `worldstereo_wrapper.py` | `_resolve_local_snapshot()` 将 Wan base model repo id 解析到本地 HF snapshot | 避免离线/镜像环境下 diffusers 尝试访问 Hugging Face | 不是显存优化 |
 | WorldStereo | `worldstereo_wrapper.py` | `WS_TEXT_DTYPE=bf16` 控制 UMT5/CLIP 加载 dtype | 降低文本和图像编码器权重占用 | 组件估算：UMT5 约节省 `12.5 GiB/card`，CLIP 约减半；需保留全流程实测 |
@@ -322,12 +322,12 @@ Stage5 profile 输出质量指标：
 - 第二次重建进展：CUDA 12.8、`hyworld2`、`hyworld2-pano`、gsplat、flash-attn、pytorch3d、MoGe、fused-ssim、rtree 和 build-time import checks 均通过。
 - 第二次重建失败点：Dockerfile 后置层尝试从清华 PyPI 镜像 `pip install --force-reinstall pytorch3d`，但 PyPI 没有 `pytorch3d` 包。该层与前面已成功执行的 `requirements_git.txt` 源码安装重复，已删除。
 - 第三次重建中止点：Dockerfile 的 VLM shim 层注释声称使用 transformers shim，但实际执行 `pip install vllm`。这会重新引入已拒绝的 vLLM/FlashInfer/torch 版本风险并显著增加镜像体积，已改为由 `scripts/launch_vlm.sh` 直接使用镜像内 `hyworld2-pano` 环境运行 `scripts/vlm_server.py`。
-- 第四次重建成功：`docker build` 产出 `hyworld2-base:3.0.0-beta2`，build-time import checks 通过：`hyworld2` 环境可导入 `torch/diffusers/transformers/recast/gsplat/worldrecon.pipeline`，`hyworld2-pano` 环境可导入 `pipeline/pipeline_with_qwen_image`。
+- 第四次重建成功：`docker build` 产出 `hyworld2-base:v1.0`，build-time import checks 通过：`hyworld2` 环境可导入 `torch/diffusers/transformers/recast/gsplat/worldrecon.pipeline`，`hyworld2-pano` 环境可导入 `pipeline/pipeline_with_qwen_image`。
 - Fresh container 验证成功：`python docker.py stop && python docker.py start && python docker.py verify` 通过；`docker.py verify` 会显式断言容器内 `HF_HOME=/models/.cache/huggingface`、`HUGGINGFACE_HUB_CACHE=/models/.cache/huggingface/hub`、`HF_ENDPOINT=https://hf-mirror.com`、`SAM3_REPO_ID=/models/sam3`、`WORLDSTEREO_REPO=/models/WorldStereo`、`WORLDMIRROR_MODEL=/models/HY-World-2.0`、`WS_TEXT_DTYPE=bf16`、`WS_AUX_OFFLOAD=1`、`WORLDMIRROR_NPROC_PER_NODE=1`、`WORLDMIRROR_TARGET_SIZE=512`、`WORLDMIRROR_CUDA_VISIBLE_DEVICES=0` 均为默认值。
 - VLM shim 轻量验证成功：`hyworld2-pano` 环境可导入 `fastapi`、`uvicorn`、`AutoModelForImageTextToText`、`AutoProcessor`；未在验证中加载完整 Qwen3-VL 权重。
-- 第五次重建成功：Dockerfile 使用清华 PyPI 镜像和预编译 flash-attn wheel 后，`docker build` 成功产出 `hyworld2-base:3.0.0-beta2`；日志确认 `flash-attn-2.8.2+cu128torch2.7` 由 wheel 安装成功，`requirements_git.txt`、PyTorch3D CUDA build、navmesh 和 build-time import checks 均通过。
+- 第五次重建成功：Dockerfile 使用清华 PyPI 镜像和预编译 flash-attn wheel 后，`docker build` 成功产出 `hyworld2-base:v1.0`；日志确认 `flash-attn-2.8.2+cu128torch2.7` 由 wheel 安装成功，`requirements_git.txt`、PyTorch3D CUDA build、navmesh 和 build-time import checks 均通过。
 - Fresh container GPU rasterizer 验证成功：`python docker.py stop && python docker.py start && python docker.py verify` 通过，`PyTorch3D CUDA rasterizer` runtime check 输出 `pytorch3d cuda rasterizer ok (1, 4, 4, 2)`。
-- 镜像构建成功：`python docker.py build` 产出 `hyworld2-base:3.0.0-beta2`；容器为 Ubuntu `24.04`、CUDA `12.8` compiler build；build-time import checks 通过 `hyworld2` / `hyworld2-pano`。
+- 镜像构建成功：`python docker.py build` 产出 `hyworld2-base:v1.0`；容器为 Ubuntu `24.04`、CUDA `12.8` compiler build；build-time import checks 通过 `hyworld2` / `hyworld2-pano`。
 - Fresh container 验证成功：`python docker.py stop && python docker.py start && python docker.py verify` 通过；`hyworld2` / `hyworld2-pano` 均看到 CUDA，PyTorch3D CUDA rasterizer 输出 `pytorch3d cuda rasterizer ok (1, 4, 4, 2)`，模型挂载 `/models` 正常。
 - 图生场景短冒烟成功：在 `hyworld2-base` 中启动 README 的 `pipeline_with_qwen_image.py` 条件图 + prompt 入口，使用 `/models/Qwen/Qwen-Image-Edit-2509` 和 `/models/HY-World-2.0/HY-Pano-2.0`，`--num-inference-steps 1`；观察到 GPU0 显存占用约 `15371 MiB` 后按要求停止，进程清理后 GPU 显存恢复。
 - Fresh container Panogen profile 验证成功：`pipeline_with_qwen_image.py` 使用 `/models/Qwen/Qwen-Image-Edit-2509` 和 `/models/HY-World-2.0/HY-Pano-2.0`，`--load-strategy balanced`，40 steps 返回码 `0`，输出 `1920 x 960` PNG。总耗时 `718.449s`；GPU0 峰值 `5489 MiB`、平均利用率 `35.13%`，GPU1 峰值 `16453 MiB`、平均利用率 `0.37%`。日志出现 diffusers 后处理 `invalid value encountered in cast` warning，输出文件仅作为 profile 验证产物未纳入 git。
