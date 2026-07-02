@@ -27,7 +27,7 @@ It covers the last three stages of the full HY-World 2.0 pipeline:
 
 - CUDA 12.8, Python 3.11+
 - &ge;4 GPUs recommended (tested with 8× H20)
-- A running OpenAI-compatible VLM server (e.g. Qwen3-VL-8B) for trajectory planning (stages 1 & 2). The Docker image includes `scripts/launch_vlm.sh`, a lightweight transformers/FastAPI shim for Blackwell systems where vLLM/FlashInfer is unavailable. Start it on a separate GPU and pass `--llm_addr`, `--llm_port`, and `--llm_name` to `traj_generate.py` and `traj_render.py`. Example:
+- A running OpenAI-compatible VLM server (default: Qwen3.5-4B) for trajectory planning (stages 1 & 2). The Docker image includes `scripts/launch_vlm.sh`, a lightweight transformers/FastAPI shim for Blackwell systems where vLLM/FlashInfer is unavailable. Start it on a separate GPU and pass `--llm_addr`, `--llm_port`, and `--llm_name` to `traj_generate.py` and `traj_render.py`. Example:
 
   ```bash
   # Launch the bundled VLM shim (on a separate GPU or machine)
@@ -56,7 +56,7 @@ TARGET_PATH=/path/to/your/scene       # ../../examples/worldgen/case000
 RESULT_DIR=/path/to/output
 LLM_ADDR=0.0.0.0        # OpenAI-compatible VLM server address
 LLM_PORT=8000           # OpenAI-compatible VLM server port
-LLM_NAME=Qwen/Qwen3-VL-8B-Instruct
+LLM_NAME=Qwen/Qwen3.5-4B
 
 # Stage 1: Trajectory Planning (single GPU)
 python traj_generate.py --target_path $TARGET_PATH \

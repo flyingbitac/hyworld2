@@ -182,8 +182,8 @@ RUN chmod 777 /root
 RUN "${CONDA_DIR}/bin/conda" run -n hyworld2 python -m pip install \
         -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple rtree
 
-# VLM server for WorldNav (stages 1-2). scripts/launch_vlm.sh serves Qwen3-VL
-# through the lightweight transformers OpenAI-compatible shim in hyworld2-pano.
+# VLM server for WorldNav (stages 1-2). scripts/launch_vlm.sh serves the
+# configured VLM through the lightweight transformers OpenAI-compatible shim.
 
 WORKDIR ${HYWORLD_ROOT}
 # USER 1000:1000

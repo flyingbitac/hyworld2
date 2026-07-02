@@ -16,7 +16,7 @@
 | FLUX.2 Klein 9B 360 Panorama LoRA | `--panorama-backend flux-lora` 直接从 prompt 生成 2:1 全景图 | `/models/flux-2-klein-9b-360-panorama-lora` | 约 0.4G | 无；`download` 会 fallback 到 Hugging Face | [crafiq/flux-2-klein-9b-360-panorama-lora](https://huggingface.co/crafiq/flux-2-klein-9b-360-panorama-lora) |
 | Qwen-Image-Edit-2509 | HY-Pano Qwen backend base model | `/models/Qwen/Qwen-Image-Edit-2509` | 54G | [Qwen/Qwen-Image-Edit-2509](https://www.modelscope.cn/models/Qwen/Qwen-Image-Edit-2509) | [Qwen/Qwen-Image-Edit-2509](https://huggingface.co/Qwen/Qwen-Image-Edit-2509) |
 | HY-World 2.0 | HY-Pano-Qwen LoRA 和 WorldMirror 权重；`download` 默认跳过 80B full HY-Pano | `/models/HY-World-2.0`，只需 `HY-Pano-2.0/pytorch_lora_weights.safetensors` 和 `HY-WorldMirror-2.0/` | 约 5.6G | [Tencent-Hunyuan/HY-World-2.0](https://www.modelscope.cn/models/Tencent-Hunyuan/HY-World-2.0/files) | [tencent/HY-World-2.0](https://huggingface.co/tencent/HY-World-2.0) |
-| Qwen3-VL-8B-Instruct | WorldNav trajectory planning / VLM captions 的 OpenAI-compatible VLM shim | `/models/Qwen/Qwen3-VL-8B-Instruct` | 17G | [Qwen/Qwen3-VL-8B-Instruct](https://www.modelscope.cn/models/Qwen/Qwen3-VL-8B-Instruct) | [Qwen/Qwen3-VL-8B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct) |
+| Qwen3.5-4B | WorldNav trajectory planning / VLM captions 的 OpenAI-compatible VLM shim 默认模型；可用 `docker.py run --vlm` 切换 | `/models/Qwen/Qwen3.5-4B` | 约 9G | [Qwen/Qwen3.5-4B](https://www.modelscope.cn/models/Qwen/Qwen3.5-4B) | [Qwen/Qwen3.5-4B](https://huggingface.co/Qwen/Qwen3.5-4B) |
 | SAM3 | WorldNav 目标分割、WorldMirror sky/semantic mask | `/models/sam3`，由 `SAM3_REPO_ID` 指定 | 6.5G | [facebook/sam3](https://www.modelscope.cn/models/facebook/sam3) | [facebook/sam3](https://huggingface.co/facebook/sam3) |
 | WorldStereo | Stage3 WorldStereo adapter 权重；当前 `docker.py run` 默认只使用 `worldstereo-memory-dmd/` | `/models/WorldStereo/worldstereo-memory-dmd` | 33G | [hanshanxue/WorldStereo](https://www.modelscope.cn/models/hanshanxue/WorldStereo) | [hanshanxue/WorldStereo](https://huggingface.co/hanshanxue/WorldStereo) |
 | Wan2.1 I2V 14B Diffusers | WorldStereo base video model；由 `WORLDSTEREO_BASE_MODEL` 指定 | `/models/Wan2.1-I2V-14B-480P-Diffusers` | 约 32G | [Wan-AI/Wan2.1-I2V-14B-480P-Diffusers](https://www.modelscope.cn/models/Wan-AI/Wan2.1-I2V-14B-480P-Diffusers) | [Wan-AI/Wan2.1-I2V-14B-480P-Diffusers](https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P-Diffusers) |
@@ -91,7 +91,9 @@ python docker.py run \
   --device 0,1
 ```
 
-`run` 不会自动 build 镜像；如果镜像不存在会直接报错。若对应容器已经存在，命令会启动/复用该容器并在退出时保留；若同名容器完全不存在，命令会临时启动一个容器并在流程结束或失败后自动关闭，且会把 `/models` 挂载为可写以便使用本地模型目录。`--device 0` 会用单卡跑完整流程，Stage3 默认使用 `group-stream` offload；`--device 0,1` 会用第 0 张卡跑 FLUX/HY-Pano、WorldNav 主进程和 3DGS training，用第 1 张卡跑 VLM shim，Stage3 和 `gen_gs_data.py` 使用两张卡。3DGS 训练的每 GPU 图像 batch 可用 `--batchsize N` 调整，默认 `4`。恢复已有场景时加 `--skip-existing`。
+`run` 不会自动 build 镜像；如果镜像不存在会直接报错。若对应容器已经存在，命令会启动/复用该容器并在退出时保留；若同名容器完全不存在，命令会临时启动一个容器并在流程结束或失败后自动关闭，且会把 `/models` 挂载为可写以便使用本地模型目录。`--device 0` 会用单卡跑完整流程，Stage3 默认使用 `group-stream` offload；`--device 0,1` 会用第 0 张卡跑 FLUX/HY-Pano、WorldNav 主进程和 3DGS training，用第 1 张卡跑 VLM shim，Stage3 和 `gen_gs_data.py` 使用两张卡。VLM shim 默认加载 `/models/Qwen/Qwen3.5-4B`；可用 `--vlm Qwen3.5-4B`、`--vlm Qwen/Qwen3-VL-8B-Instruct` 或其他 `/models` 下的 VLM 切换。3DGS 训练的每 GPU 图像 batch 可用 `--batchsize N` 调整，默认 `4`。恢复已有场景时加 `--skip-existing`。
+
+性能分析时加 `--profile`，wrapper 会按实际执行的 stage 采样 `--device` 指定 GPU 的显存和利用率，并在宿主机 `examples/worldgen/<runname>/profiles/` 下输出 `profile.json`、`profile.md`，以及每个 stage 的 `stage_XX_*.csv` / `stage_XX_*.json`；容器内对应路径是 `$SCENE/profiles/`。采样间隔可用 `--profile-interval 0.5` 调整，默认 1 秒。
 
 两个 panorama backend 默认都用 `1952x960` 做 panorama 推理；HY-Pano 会默认融合并裁掉 32px 接缝，FLUX LoRA 路径也会用 `--flux-pano-blend-width 32` 做同样处理，因此最终 `$SCENE/panorama.png` 默认保存为 `1920x960`。可分别用 `--pano-height/--pano-width`、`--flux-pano-height/--flux-pano-width` 和 `--flux-pano-blend-width` 覆盖。
 
@@ -103,8 +105,8 @@ python docker.py run \
 
 | 环境 | 用途 |
 |------|------|
-| `hyworld2` | WorldNav、WorldStereo、WorldMirror、3DGS 训练和查看。 |
-| `hyworld2-pano` | HY-Pano 2.0 全景图生成，以及 WorldNav 使用的 VLM shim。 |
+| `hyworld2` | WorldNav、WorldStereo、WorldMirror、3DGS 训练和查看，以及 WorldNav 使用的 VLM shim。 |
+| `hyworld2-pano` | HY-Pano 2.0 全景图生成。 |
 | `flux2` | FLUX.2 Klein 文本生成条件图，不污染 `hyworld2-pano` 的 diffusers 版本。 |
 
 下面的长推理命令都使用 `conda run --no-capture-output` 和 `python -u`，避免 `conda run` 缓冲日志导致终端长时间看不到进度。
@@ -214,7 +216,8 @@ CUDA_VISIBLE_DEVICES=0 /opt/miniconda3/bin/conda run --no-capture-output -n hywo
 
 ```bash
 cd /workspace/hyworld2
-CUDA_VISIBLE_DEVICES=1 PORT=8000 scripts/launch_vlm.sh > /tmp/hyworld_vlm.log 2>&1 &
+CUDA_VISIBLE_DEVICES=1 PORT=8000 VLM_MODEL=/models/Qwen/Qwen3.5-4B VLM_NAME=Qwen/Qwen3.5-4B \
+  scripts/launch_vlm.sh > /tmp/hyworld_vlm.log 2>&1 &
 ```
 
 然后执行后续命令：
@@ -226,14 +229,14 @@ cd /workspace/hyworld2/hyworld2/worldgen
 CUDA_VISIBLE_DEVICES=0 /opt/miniconda3/bin/conda run --no-capture-output -n hyworld2 \
   python -u traj_generate.py \
     --target_path "$SCENE" \
-    --llm_addr localhost --llm_port 8000 --llm_name Qwen/Qwen3-VL-8B-Instruct \
+    --llm_addr localhost --llm_port 8000 --llm_name Qwen/Qwen3.5-4B \
     --apply_nav_traj --apply_up_route --apply_recon_iteration --force_vlm
 
 # 对应 docker.py run Stage 2: 轨迹渲染和 VLM caption。
 CUDA_VISIBLE_DEVICES=0 /opt/miniconda3/bin/conda run --no-capture-output -n hyworld2 \
   torchrun --nproc_per_node=1 traj_render.py \
     --target_path "$SCENE" \
-    --llm_addr localhost --llm_port 8000 --llm_name Qwen/Qwen3-VL-8B-Instruct
+    --llm_addr localhost --llm_port 8000 --llm_name Qwen/Qwen3.5-4B
 
 # Stage 3 之前释放 VLM 显存。
 pkill -f '[v]lm_server.py|[l]aunch_vlm.sh' || true
@@ -283,6 +286,8 @@ CUDA_VISIBLE_DEVICES=0 /opt/miniconda3/bin/conda run --no-capture-output -n hywo
 |------|------|
 | `--skip-existing` | `docker.py run` 参数；转发为底层脚本的 `--skip_exist`，跳过已有 Stage2/Stage3 产物，适合 resume。 |
 | `--skip 1,2,3,4` | `docker.py run` 参数；跳过指定 wrapper stage。例如已有全景图时可用 `--skip 1`。 |
+| `--profile` | `docker.py run` 参数；按 wrapper stage 输出耗时、GPU 峰值显存和平均利用率到 `examples/worldgen/<runname>/profiles/`。 |
+| `--profile-interval 1.0` | `docker.py run` 参数；设置 GPU 采样间隔，单位秒。 |
 | `--local_files_only` | 只使用本地模型缓存，避免运行时访问 Hugging Face。 |
 | `--stage3-offload-mode auto` | `docker.py run` 默认；单卡解析为 `group-stream`，多卡解析为 `none` 并启用 FSDP。 |
 | `--fsdp` | 手动运行 `video_gen.py` 的多卡参数；`docker.py run --device 0,1` 会自动添加。 |

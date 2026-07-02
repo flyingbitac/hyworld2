@@ -257,6 +257,7 @@ CUDA_VISIBLE_DEVICES=0 /opt/miniconda3/bin/conda run --no-capture-output -n hywo
 | Pano | `panogen/README.md` | PyTorch 安装说明从 CUDA 11.8 改为 CUDA 12.8 | 与 Dockerfile / Blackwell 环境一致 | 不是显存优化 |
 | 仓库卫生 | `.gitignore` / `.dockerignore` | 忽略模型、示例输出、checkpoint、视频等大文件 | 防止生成产物进入 git | 不是显存优化 |
 | 仓库卫生 | `scripts/profile_gpu.py` | SIGINT/SIGTERM 时转发终止给被测命令的整个进程组并仍写 JSON summary，添加 `interrupted: true` | 长跑 profile 被人工停止时不再只留下 CSV，也不残留 torchrun worker；Stage3 full attempt 这类测量可复现记录峰值 | 不是显存优化 |
+| Docker wrapper | `docker.py` / `scripts/profile_gpu.py` | `docker.py run --profile` 按 wrapper stage 生成 per-stage CSV/JSON，并汇总为 `profile.json` / `profile.md`；`scripts/profile_gpu.py` 支持 `--gpus` 只采样 `--device` 指定的物理卡 | 将历史手工 profile 流程产品化，失败或跳过 stage 也能在最终报告中定位 | 不是显存优化 |
 | 仓库卫生 | `scripts/test_vlm.py` | 删除一次性手工 VLM 探测脚本 | 该脚本不属于 Docker verify 或 pipeline 入口，保留会增加维护噪音 | 不是显存优化 |
 
 ## 已知失败路径
