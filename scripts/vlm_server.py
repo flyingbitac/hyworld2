@@ -1,13 +1,13 @@
 """Lightweight OpenAI-compatible VLM server for WorldNav (stages 1-2).
 
 Drop-in replacement for `vllm serve` when vLLM can't run (e.g. its bundled
-FlashInfer misdetects Blackwell sm_120). Serves Qwen3-VL-8B via plain
+FlashInfer misdetects Blackwell sm_120). Serves the configured VLM via plain
 `transformers` over an OpenAI-compatible /v1/chat/completions endpoint, so
 traj_generate.py / vlm_utils.py's `OpenAI(...).chat.completions.create(...)`
 calls work unchanged.
 
 Run:
-    CUDA_VISIBLE_DEVICES=1 conda run -n hyworld2-pano python scripts/vlm_server.py
+    CUDA_VISIBLE_DEVICES=1 conda run -n hyworld2 python scripts/vlm_server.py
 
 Handles both image formats used by the repo:
   - OpenAI: {"type":"image_url","image_url":{"url":"data:image/png;base64,..."}}
@@ -25,9 +25,15 @@ from fastapi import FastAPI, Request
 from pydantic import BaseModel
 import uvicorn
 
-MODEL_PATH = os.environ.get("VLM_MODEL", "/models/Qwen/Qwen3-VL-8B-Instruct")
-SERVED_NAME = os.environ.get("VLM_NAME", "Qwen/Qwen3-VL-8B-Instruct")
+MODEL_PATH = os.environ.get("VLM_MODEL", "/models/Qwen/Qwen3.5-4B")
+SERVED_NAME = os.environ.get("VLM_NAME", "Qwen/Qwen3.5-4B")
 PORT = int(os.environ.get("PORT", "8000"))
+
+if MODEL_PATH.startswith("/models/") and not os.path.isdir(MODEL_PATH):
+    qwen_model_path = os.path.join("/models/Qwen", os.path.basename(MODEL_PATH))
+    if os.path.isdir(qwen_model_path):
+        print(f"[vlm-shim] resolved {MODEL_PATH} -> {qwen_model_path}", flush=True)
+        MODEL_PATH = qwen_model_path
 
 print(f"[vlm-shim] loading {MODEL_PATH} ...", flush=True)
 from transformers import AutoModelForImageTextToText, AutoProcessor
@@ -39,6 +45,19 @@ model = AutoModelForImageTextToText.from_pretrained(
 print(f"[vlm-shim] loaded on {model.device}", flush=True)
 
 app = FastAPI()
+
+
+def _apply_chat_template(conversation):
+    return processor.apply_chat_template(conversation, tokenize=False, add_generation_prompt=True)
+
+
+def _strip_thinking(text: str) -> str:
+    text = re.sub(r"(?is)<think>.*?</think>\s*", "", text).strip()
+    if "</think>" in text:
+        text = text.rsplit("</think>", 1)[-1].strip()
+    if "<think>" in text:
+        text = text.split("<think>", 1)[0].strip()
+    return text
 
 
 def _load_url(url: str) -> Image.Image:
@@ -102,7 +121,7 @@ async def chat_completions(request: Request):
         prompt = "".join(m["content"] for m in conversation if isinstance(m.get("content"), str))
         inputs = processor(text=[prompt], images=all_images or None, return_tensors="pt", padding=True).to(model.device)
     else:
-        prompt = processor.apply_chat_template(conversation, tokenize=False, add_generation_prompt=True)
+        prompt = _apply_chat_template(conversation)
         inputs = processor(text=[prompt], images=all_images or None, return_tensors="pt", padding=True).to(model.device)
 
     in_len = inputs["input_ids"].shape[1]
@@ -113,7 +132,7 @@ async def chat_completions(request: Request):
             do_sample=False,
         )
     gen = out[0][in_len:]
-    answer = processor.decode(gen, skip_special_tokens=True).strip()
+    answer = _strip_thinking(processor.decode(gen, skip_special_tokens=True).strip())
 
     return {
         "object": "chat.completion",

@@ -68,7 +68,7 @@ os.environ["NO_PROXY"] = "localhost,127.0.0.1,0.0.0.0"
 os.environ['VLLM_WORKER_MULTIPROC_METHOD'] = 'spawn'
 
 LLM_ADDR = "localhost"
-MODEL_NAME = "Qwen/Qwen3-VL-8B-Instruct"
+MODEL_NAME = "Qwen/Qwen3.5-4B"
 
 LLM_PORT = 8000
 

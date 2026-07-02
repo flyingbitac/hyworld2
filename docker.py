@@ -4,14 +4,17 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import shutil
 import shlex
 import subprocess
 import sys
+import time
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -20,6 +23,7 @@ DEFAULT_IMAGE = "hyworld2-base:v1.0"
 DEFAULT_CONTAINER = "hyworld2-base"
 DEFAULT_DOCKERFILE = Path("Dockerfile")
 DEFAULT_MODELS = REPO_ROOT / "models"
+DEFAULT_VLM = "Qwen/Qwen3.5-4B"
 ALIYUN_IMAGE = "crpi-jq3nu6qbricb9zcb.cn-beijing.personal.cr.aliyuncs.com/zxh_in_bitac/hyworld2"
 CONTAINER_WORKDIR = "/workspace/hyworld2"
 CONTAINER_MODELS = "/models"
@@ -42,7 +46,7 @@ MODEL_DOWNLOADS = (
         "HY-World-2.0",
         ("HY-Pano-2.0/pytorch_lora_weights.safetensors", "HY-WorldMirror-2.0/*"),
     ),
-    ("Qwen/Qwen3-VL-8B-Instruct", "Qwen/Qwen3-VL-8B-Instruct", "Qwen/Qwen3-VL-8B-Instruct", ()),
+    (DEFAULT_VLM, DEFAULT_VLM, DEFAULT_VLM, ()),
     ("facebook/sam3", "facebook/sam3", "sam3", ()),
     ("hanshanxue/WorldStereo", "hanshanxue/WorldStereo", "WorldStereo", ("worldstereo-memory-dmd/*",)),
     (
@@ -66,7 +70,7 @@ MODEL_REQUIRED_FILES = {
     FLUX_PANORAMA_LORA_DIR: (FLUX_PANORAMA_LORA_WEIGHT,),
     "Qwen/Qwen-Image-Edit-2509": ("model_index.json",),
     "HY-World-2.0": HY_WORLD_REQUIRED_FILES,
-    "Qwen/Qwen3-VL-8B-Instruct": ("config.json",),
+    DEFAULT_VLM: ("config.json",),
     "sam3": ("config.json",),
     "WorldStereo": ("worldstereo-memory-dmd/config.json", "worldstereo-memory-dmd/model.safetensors"),
     "Wan2.1-I2V-14B-480P-Diffusers": ("model_index.json",),
@@ -82,8 +86,219 @@ MODEL_REQUIRED_FILES = {
     ),
     "dinov2-base": ("config.json", "preprocessor_config.json", "model.safetensors"),
 }
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def repo_relative(path: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(REPO_ROOT.resolve()))
+    except ValueError:
+        return str(path)
+
+
+def stage_slug(label: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")
+    return slug[:72] or "stage"
+
+
+def format_seconds(value: float | int | None) -> str:
+    if value is None:
+        return "-"
+    return f"{float(value):.3f}s"
+
+
+class ProfileRecorder:
+    def __init__(
+        self,
+        *,
+        args: argparse.Namespace,
+        scene: str,
+        devices: list[str],
+        stage3_offload_mode: str,
+        skip_stages: set[int],
+    ) -> None:
+        self.runname = args.runname
+        self.devices = devices
+        self.sample_interval = args.profile_interval
+        self.container_dir = f"{scene}/profiles"
+        self.host_dir = REPO_ROOT / "examples" / "worldgen" / args.runname / "profiles"
+        self.host_dir.mkdir(parents=True, exist_ok=True)
+        self.started_at = time.time()
+        self.started_at_iso = utc_now()
+        self.stage_index = 0
+        self.stages: list[dict[str, object]] = []
+        self.run_metadata = {
+            "image": args.image,
+            "container": args.name,
+            "prompt": args.prompt,
+            "panorama_backend": args.panorama_backend,
+            "vlm": args.vlm,
+            "device": args.device,
+            "stage3_offload_mode": stage3_offload_mode,
+            "skip": sorted(skip_stages),
+            "skip_existing": args.skip_existing,
+            "batchsize": args.batchsize,
+            "gs_steps": args.gs_steps,
+        }
+
+    @property
+    def gpu_filter(self) -> str:
+        return ",".join(self.devices)
+
+    def wrap_stage(self, label: str, command: str) -> tuple[dict[str, object], str]:
+        index = self.stage_index
+        self.stage_index += 1
+        slug = stage_slug(label)
+        stem = f"stage_{index:02d}_{slug}"
+        host_csv = self.host_dir / f"{stem}.csv"
+        host_summary = self.host_dir / f"{stem}.json"
+        container_csv = f"{self.container_dir}/{stem}.csv"
+        container_summary = f"{self.container_dir}/{stem}.json"
+        record: dict[str, object] = {
+            "index": index,
+            "label": label,
+            "slug": slug,
+            "status": "running",
+            "skipped": False,
+            "csv": repo_relative(host_csv),
+            "summary": repo_relative(host_summary),
+        }
+        self.stages.append(record)
+
+        inner = f"set -euo pipefail; {command}"
+        profiled_command = (
+            f"cd {shlex.quote(CONTAINER_WORKDIR)} && "
+            "/opt/miniconda3/bin/python scripts/profile_gpu.py "
+            f"--sample-interval {shlex.quote(str(self.sample_interval))} "
+            f"--gpus {shlex.quote(self.gpu_filter)} "
+            f"--csv {shlex.quote(container_csv)} "
+            f"--summary {shlex.quote(container_summary)} "
+            f"-- bash -lc {shlex.quote(inner)}"
+        )
+        return record, profiled_command
+
+    def finish_stage(self, record: dict[str, object]) -> None:
+        summary_path = REPO_ROOT / str(record["summary"])
+        if not summary_path.is_file():
+            record["status"] = "summary-missing"
+            record["summary_missing"] = True
+            return
+        summary = json.loads(summary_path.read_text())
+        returncode = summary.get("returncode")
+        record["returncode"] = returncode
+        record["elapsed_sec"] = summary.get("elapsed_sec")
+        record["gpus"] = summary.get("gpus", {})
+        if summary.get("interrupted"):
+            record["interrupted"] = True
+        record["status"] = "ok" if returncode == 0 else "failed"
+
+    def record_skipped(self, stage_number: int, label: str) -> None:
+        index = self.stage_index
+        self.stage_index += 1
+        full_label = f"Skip Stage {stage_number}: {label}"
+        self.stages.append(
+            {
+                "index": index,
+                "label": full_label,
+                "slug": stage_slug(full_label),
+                "status": "skipped",
+                "skipped": True,
+                "elapsed_sec": 0.0,
+                "gpus": {},
+            }
+        )
+
+    def write(self, *, status: str, error: str | None = None) -> None:
+        for record in self.stages:
+            if not record.get("skipped") and record.get("status") == "running":
+                self.finish_stage(record)
+
+        elapsed = time.time() - self.started_at
+        profile = {
+            "runname": self.runname,
+            "status": status,
+            "error": error,
+            "started_at": self.started_at_iso,
+            "ended_at": utc_now(),
+            "elapsed_sec": round(elapsed, 3),
+            "devices": self.devices,
+            "gpus_filter": [int(device) for device in self.devices],
+            "sample_interval_sec": self.sample_interval,
+            "profile_dir": repo_relative(self.host_dir),
+            "run": self.run_metadata,
+            "stages": self.stages,
+        }
+        profile_json = self.host_dir / "profile.json"
+        profile_md = self.host_dir / "profile.md"
+        profile_json.write_text(json.dumps(profile, indent=2, sort_keys=True) + "\n")
+        profile_md.write_text(self.render_markdown(profile))
+        print(f"[PROFILE] summary: {profile_json}", flush=True)
+        print(f"[PROFILE] report:  {profile_md}", flush=True)
+
+    def render_markdown(self, profile: dict[str, object]) -> str:
+        lines = [
+            f"# HY-World run profile: {self.runname}",
+            "",
+            f"- Status: {profile['status']}",
+            f"- Elapsed: {format_seconds(profile['elapsed_sec'])}",
+            f"- Devices: {','.join(self.devices)}",
+            f"- Sample interval: {self.sample_interval}s",
+        ]
+        if profile.get("error"):
+            lines.append(f"- Error: `{profile['error']}`")
+        lines.extend(
+            [
+                "",
+                "| # | Stage | Status | Return code | Elapsed | Peak memory MiB | Avg GPU util % | Files |",
+                "|---|-------|--------|-------------|---------|-----------------|----------------|-------|",
+            ]
+        )
+        for record in self.stages:
+            gpus = record.get("gpus", {})
+            peak = "-"
+            util = "-"
+            if isinstance(gpus, dict) and gpus:
+                peak = ", ".join(
+                    f"{gpu}: {stats.get('peak_memory_mib', '-')}"
+                    for gpu, stats in sorted(gpus.items(), key=lambda item: int(item[0]))
+                    if isinstance(stats, dict)
+                )
+                util = ", ".join(
+                    f"{gpu}: {stats.get('avg_utilization_gpu_pct', '-')}"
+                    for gpu, stats in sorted(gpus.items(), key=lambda item: int(item[0]))
+                    if isinstance(stats, dict)
+                )
+            files = "-"
+            if record.get("csv") and record.get("summary"):
+                files = f"{record['csv']}, {record['summary']}"
+            lines.append(
+                "| {index} | {label} | {status} | {returncode} | {elapsed} | {peak} | {util} | {files} |".format(
+                    index=record["index"],
+                    label=str(record["label"]).replace("|", "\\|"),
+                    status=record.get("status", "-"),
+                    returncode=record.get("returncode", "-"),
+                    elapsed=format_seconds(record.get("elapsed_sec") if isinstance(record.get("elapsed_sec"), (int, float)) else None),
+                    peak=peak,
+                    util=util,
+                    files=files,
+                )
+            )
+        return "\n".join(lines) + "\n"
+
+
 def shell_join(*parts: str) -> str:
     return " ".join(shlex.quote(str(part)) for part in parts)
+
+
+def container_model_path(model: str) -> str:
+    if model.startswith("/"):
+        return model
+    if "/" not in model and model.startswith("Qwen"):
+        return f"{CONTAINER_MODELS}/Qwen/{model}"
+    return f"{CONTAINER_MODELS}/{model}"
 
 
 def run(command: list[str], *, check: bool = True, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
@@ -372,11 +587,22 @@ def docker_exec(args: argparse.Namespace, command: str) -> None:
 
 def stage(args: argparse.Namespace, label: str, command: str) -> None:
     print(f"\n[RUN] {label}", flush=True)
-    docker_exec(args, f"set -euo pipefail; {command}")
+    recorder = getattr(args, "_profile_recorder", None)
+    if recorder is None:
+        docker_exec(args, f"set -euo pipefail; {command}")
+        return
+    record, profiled_command = recorder.wrap_stage(label, command)
+    try:
+        docker_exec(args, f"set -euo pipefail; {profiled_command}")
+    finally:
+        recorder.finish_stage(record)
 
 
-def skipped_stage(stage_number: int, label: str) -> None:
+def skipped_stage(args: argparse.Namespace, stage_number: int, label: str) -> None:
     print(f"\n[RUN] Skip Stage {stage_number}: {label}", flush=True)
+    recorder = getattr(args, "_profile_recorder", None)
+    if recorder is not None:
+        recorder.record_skipped(stage_number, label)
 
 
 def parse_skip_stages(spec: str) -> set[int]:
@@ -447,6 +673,8 @@ def run_workflow(args: argparse.Namespace) -> None:
             raise ValueError("--device must be a comma-separated list of CUDA device ids, e.g. 0 or 0,1.")
     if args.batchsize < 1:
         raise ValueError("--batchsize must be a positive integer.")
+    if args.profile_interval <= 0:
+        raise ValueError("--profile-interval must be positive.")
     primary_device = devices[0]
     vlm_device = devices[1] if len(devices) > 1 else devices[0]
     all_devices = ",".join(devices)
@@ -477,11 +705,13 @@ def run_workflow(args: argparse.Namespace) -> None:
     skip_existing_arg = " --skip_exist" if args.skip_existing else ""
     flux_panorama_lora_path = f"{CONTAINER_MODELS}/{FLUX_PANORAMA_LORA_DIR}"
     flux_panorama_lora_file = f"{flux_panorama_lora_path}/{FLUX_PANORAMA_LORA_WEIGHT}"
+    vlm_model_path = container_model_path(args.vlm)
 
     print(f"[RUN] container: {args.name}", flush=True)
     print(f"[RUN] scene:     {scene}", flush=True)
     print(f"[RUN] devices:   {all_devices}", flush=True)
     print(f"[RUN] panorama:  {args.panorama_backend}", flush=True)
+    print(f"[RUN] vlm:       {args.vlm} ({vlm_model_path})", flush=True)
     if skip_stages:
         print(f"[RUN] skip:      {','.join(str(stage_number) for stage_number in sorted(skip_stages))}", flush=True)
     if stage3_single_gpu:
@@ -489,6 +719,20 @@ def run_workflow(args: argparse.Namespace) -> None:
     else:
         print("[RUN] stage3:   multi GPU, FSDP enabled", flush=True)
 
+    profile_recorder = None
+    if args.profile:
+        profile_recorder = ProfileRecorder(
+            args=args,
+            scene=scene,
+            devices=devices,
+            stage3_offload_mode=stage3_offload_mode,
+            skip_stages=skip_stages,
+        )
+        args._profile_recorder = profile_recorder
+        print(f"[RUN] profile:  {profile_recorder.host_dir}", flush=True)
+
+    run_status = "completed"
+    run_error = None
     try:
         stage(
             args,
@@ -497,7 +741,7 @@ def run_workflow(args: argparse.Namespace) -> None:
         )
 
         if 1 in skip_stages:
-            skipped_stage(1, "panorama generation")
+            skipped_stage(args, 1, "panorama generation")
         elif args.panorama_backend == "hypano":
             stage(
                 args,
@@ -601,9 +845,10 @@ def run_workflow(args: argparse.Namespace) -> None:
                     f"cd {shlex.quote(CONTAINER_WORKDIR)} && "
                     f"mkdir -p {shlex.quote(scene)} && "
                     f"nohup env CUDA_VISIBLE_DEVICES={shlex.quote(vlm_device)} PORT={args.vlm_port} "
+                    f"VLM_MODEL={shlex.quote(vlm_model_path)} VLM_NAME={shlex.quote(args.vlm)} "
                     f"scripts/launch_vlm.sh > {shlex.quote(scene + '/vlm_server.log')} 2>&1 & "
                     f"echo $! > {shlex.quote(scene + '/vlm_server.pid')}; "
-                    f"{CONDA} run --no-capture-output -n hyworld2-pano python - <<'PY'\n"
+                    f"{CONDA} run --no-capture-output -n hyworld2 python - <<'PY'\n"
                     "import pathlib, sys, time, urllib.request\n"
                     f"log = pathlib.Path({scene + '/vlm_server.log'!r})\n"
                     f"url = 'http://127.0.0.1:{args.vlm_port}/health'\n"
@@ -634,7 +879,7 @@ def run_workflow(args: argparse.Namespace) -> None:
                     "/opt/miniconda3/bin/conda run --no-capture-output -n hyworld2 "
                     "python -u traj_generate.py "
                     f"--target_path {shlex.quote(scene)} "
-                    f"--llm_addr localhost --llm_port {args.vlm_port} --llm_name Qwen/Qwen3-VL-8B-Instruct "
+                    f"--llm_addr localhost --llm_port {args.vlm_port} --llm_name {shlex.quote(args.vlm)} "
                     f"--apply_nav_traj --apply_up_route --apply_recon_iteration --force_vlm{skip_existing_arg}"
                 ),
             )
@@ -648,7 +893,7 @@ def run_workflow(args: argparse.Namespace) -> None:
                     "/opt/miniconda3/bin/conda run --no-capture-output -n hyworld2 "
                     "torchrun --nproc_per_node=1 traj_render.py "
                     f"--target_path {shlex.quote(scene)} "
-                    f"--llm_addr localhost --llm_port {args.vlm_port} --llm_name Qwen/Qwen3-VL-8B-Instruct"
+                    f"--llm_addr localhost --llm_port {args.vlm_port} --llm_name {shlex.quote(args.vlm)}"
                 ),
             )
 
@@ -658,12 +903,12 @@ def run_workflow(args: argparse.Namespace) -> None:
                 vlm_stop_command(scene),
             )
         else:
-            skipped_stage(2, "trajectory planning, rendering, and VLM captions")
+            skipped_stage(args, 2, "trajectory planning, rendering, and VLM captions")
             if 3 not in skip_stages:
                 stage(args, "Ensure VLM shim is stopped before Stage 3", vlm_stop_command(scene))
 
         if 3 in skip_stages:
-            skipped_stage(3, "WorldStereo expansion and WorldMirror generation bank")
+            skipped_stage(args, 3, "WorldStereo expansion and WorldMirror generation bank")
         else:
             stage(
                 args,
@@ -679,7 +924,7 @@ def run_workflow(args: argparse.Namespace) -> None:
             )
 
         if 4 in skip_stages:
-            skipped_stage(4, "prepare 3DGS training data, train and export 3DGS")
+            skipped_stage(args, 4, "prepare 3DGS training data, train and export 3DGS")
         else:
             stage(
                 args,
@@ -724,7 +969,13 @@ def run_workflow(args: argparse.Namespace) -> None:
 
         print(f"\n[RUN] complete: {scene}", flush=True)
         print(f"[RUN] 3DGS result: {result_dir}", flush=True)
+    except BaseException as exc:
+        run_status = "interrupted" if isinstance(exc, KeyboardInterrupt) else "failed"
+        run_error = f"{type(exc).__name__}: {exc}"
+        raise
     finally:
+        if profile_recorder is not None:
+            profile_recorder.write(status=run_status, error=run_error)
         if started_container:
             print(f"\n[RUN] stopping temporary container: {args.name}", flush=True)
             stop(args)
@@ -912,11 +1163,18 @@ def add_action_parsers(parser: argparse.ArgumentParser) -> None:
     run_parser.add_argument("--batchsize", type=int, default=4, help="Per-GPU 3DGS training batch size.")
     # Differs from upstream 8-GPU example max_steps=1500; local runs usually trade more steps for fewer GPUs.
     run_parser.add_argument("--seed", type=int, default=42)
+    run_parser.add_argument(
+        "--vlm",
+        default=DEFAULT_VLM,
+        help="VLM model id served by the local shim. Relative values are resolved under /models.",
+    )
     run_parser.add_argument("--vlm-port", type=int, default=8000)
     # Local wrapper only: upstream starts the OpenAI-compatible VLM server separately.
     run_parser.add_argument("--skip-existing", action="store_true", help="Pass --skip_exist to resumable worldgen stages.")
     # Local resume helper: forwards --skip_exist to stages that support it.
     run_parser.add_argument("--skip", default="", help="Comma-separated worldgen stages to skip, e.g. 1,2,4.")
+    run_parser.add_argument("--profile", action="store_true", help="Record per-stage runtime and GPU usage under the scene profiles directory.")
+    run_parser.add_argument("--profile-interval", type=float, default=1.0, help="GPU profiling sample interval in seconds.")
     run_parser.add_argument(
         "--stage3-offload-mode",
         choices=("auto", "none", "model", "sequential", "block", "group-stream"),
