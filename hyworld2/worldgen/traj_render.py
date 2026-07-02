@@ -139,7 +139,7 @@ if __name__ == '__main__':
             total_render_list = [path for path in total_render_list if not (path.split("/")[-3].startswith("reconstruct_") and path.split("/")[-2] == "traj1")]
 
             if total_render_list:
-                with timer.track("Qwen3-VL trajectory caption (parallel)"):
+                with timer.track("VLM trajectory caption (parallel)"):
                     tasks = [(path, LLM_ADDR, LLM_PORT, MODEL_NAME) for path in total_render_list]
                     with ThreadPoolExecutor(max_workers=min(len(tasks), 32)) as executor:
                         futures = [executor.submit(caption_single_video, task) for task in tasks]

@@ -1,7 +1,7 @@
 """Lightweight OpenAI-compatible VLM server for WorldNav (stages 1-2).
 
 Drop-in replacement for `vllm serve` when vLLM can't run (e.g. its bundled
-FlashInfer misdetects Blackwell sm_120). Serves the configured VLM via plain
+FlashInfer misdetects Blackwell sm_120). Serves Qwen3.5-4B via plain
 `transformers` over an OpenAI-compatible /v1/chat/completions endpoint, so
 traj_generate.py / vlm_utils.py's `OpenAI(...).chat.completions.create(...)`
 calls work unchanged.
@@ -17,7 +17,6 @@ import base64
 import io
 import os
 import re
-import sys
 
 import torch
 from PIL import Image
@@ -25,15 +24,9 @@ from fastapi import FastAPI, Request
 from pydantic import BaseModel
 import uvicorn
 
-MODEL_PATH = os.environ.get("VLM_MODEL", "/models/Qwen/Qwen3.5-4B")
-SERVED_NAME = os.environ.get("VLM_NAME", "Qwen/Qwen3.5-4B")
+MODEL_PATH = "/models/Qwen/Qwen3.5-4B"
+SERVED_NAME = "Qwen/Qwen3.5-4B"
 PORT = int(os.environ.get("PORT", "8000"))
-
-if MODEL_PATH.startswith("/models/") and not os.path.isdir(MODEL_PATH):
-    qwen_model_path = os.path.join("/models/Qwen", os.path.basename(MODEL_PATH))
-    if os.path.isdir(qwen_model_path):
-        print(f"[vlm-shim] resolved {MODEL_PATH} -> {qwen_model_path}", flush=True)
-        MODEL_PATH = qwen_model_path
 
 print(f"[vlm-shim] loading {MODEL_PATH} ...", flush=True)
 from transformers import AutoModelForImageTextToText, AutoProcessor

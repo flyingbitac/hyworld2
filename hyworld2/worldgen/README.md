@@ -101,7 +101,7 @@ python show_gs.py --port 8081 --gpu_id 0 --ckpt "$RESULT_DIR/ckpts/ckpt_1499_ran
 
 Implemented in `traj_generate.py` + `src/navi_utils.py`:
 
-- Uses VLM (Qwen3-VL) to identify interesting targets
+- Uses the Qwen3.5-4B VLM endpoint to identify interesting targets
 - Plans diverse trajectories: surround, exploration, reconstruction, and aerial routes
 - Obstacle-aware path planning with iterative refinement
 - SAM3 semantic segmentation to guide navigation

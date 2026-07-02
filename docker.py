@@ -27,6 +27,7 @@ DEFAULT_VLM = "Qwen/Qwen3.5-4B"
 ALIYUN_IMAGE = "crpi-jq3nu6qbricb9zcb.cn-beijing.personal.cr.aliyuncs.com/zxh_in_bitac/hyworld2"
 CONTAINER_WORKDIR = "/workspace/hyworld2"
 CONTAINER_MODELS = "/models"
+DEFAULT_VLM_PATH = f"{CONTAINER_MODELS}/{DEFAULT_VLM}"
 CONDA = "/opt/miniconda3/bin/conda"
 FLUX_PANORAMA_LORA_REPO = "crafiq/flux-2-klein-9b-360-panorama-lora"
 FLUX_PANORAMA_LORA_DIR = "flux-2-klein-9b-360-panorama-lora"
@@ -135,7 +136,7 @@ class ProfileRecorder:
             "container": args.name,
             "prompt": args.prompt,
             "panorama_backend": args.panorama_backend,
-            "vlm": args.vlm,
+            "vlm": DEFAULT_VLM,
             "device": args.device,
             "stage3_offload_mode": stage3_offload_mode,
             "skip": sorted(skip_stages),
@@ -291,14 +292,6 @@ class ProfileRecorder:
 
 def shell_join(*parts: str) -> str:
     return " ".join(shlex.quote(str(part)) for part in parts)
-
-
-def container_model_path(model: str) -> str:
-    if model.startswith("/"):
-        return model
-    if "/" not in model and model.startswith("Qwen"):
-        return f"{CONTAINER_MODELS}/Qwen/{model}"
-    return f"{CONTAINER_MODELS}/{model}"
 
 
 def run(command: list[str], *, check: bool = True, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
@@ -705,13 +698,11 @@ def run_workflow(args: argparse.Namespace) -> None:
     skip_existing_arg = " --skip_exist" if args.skip_existing else ""
     flux_panorama_lora_path = f"{CONTAINER_MODELS}/{FLUX_PANORAMA_LORA_DIR}"
     flux_panorama_lora_file = f"{flux_panorama_lora_path}/{FLUX_PANORAMA_LORA_WEIGHT}"
-    vlm_model_path = container_model_path(args.vlm)
-
     print(f"[RUN] container: {args.name}", flush=True)
     print(f"[RUN] scene:     {scene}", flush=True)
     print(f"[RUN] devices:   {all_devices}", flush=True)
     print(f"[RUN] panorama:  {args.panorama_backend}", flush=True)
-    print(f"[RUN] vlm:       {args.vlm} ({vlm_model_path})", flush=True)
+    print(f"[RUN] vlm:       {DEFAULT_VLM} ({DEFAULT_VLM_PATH})", flush=True)
     if skip_stages:
         print(f"[RUN] skip:      {','.join(str(stage_number) for stage_number in sorted(skip_stages))}", flush=True)
     if stage3_single_gpu:
@@ -845,7 +836,6 @@ def run_workflow(args: argparse.Namespace) -> None:
                     f"cd {shlex.quote(CONTAINER_WORKDIR)} && "
                     f"mkdir -p {shlex.quote(scene)} && "
                     f"nohup env CUDA_VISIBLE_DEVICES={shlex.quote(vlm_device)} PORT={args.vlm_port} "
-                    f"VLM_MODEL={shlex.quote(vlm_model_path)} VLM_NAME={shlex.quote(args.vlm)} "
                     f"scripts/launch_vlm.sh > {shlex.quote(scene + '/vlm_server.log')} 2>&1 & "
                     f"echo $! > {shlex.quote(scene + '/vlm_server.pid')}; "
                     f"{CONDA} run --no-capture-output -n hyworld2 python - <<'PY'\n"
@@ -879,7 +869,7 @@ def run_workflow(args: argparse.Namespace) -> None:
                     "/opt/miniconda3/bin/conda run --no-capture-output -n hyworld2 "
                     "python -u traj_generate.py "
                     f"--target_path {shlex.quote(scene)} "
-                    f"--llm_addr localhost --llm_port {args.vlm_port} --llm_name {shlex.quote(args.vlm)} "
+                    f"--llm_addr localhost --llm_port {args.vlm_port} --llm_name {shlex.quote(DEFAULT_VLM)} "
                     f"--apply_nav_traj --apply_up_route --apply_recon_iteration --force_vlm{skip_existing_arg}"
                 ),
             )
@@ -893,7 +883,7 @@ def run_workflow(args: argparse.Namespace) -> None:
                     "/opt/miniconda3/bin/conda run --no-capture-output -n hyworld2 "
                     "torchrun --nproc_per_node=1 traj_render.py "
                     f"--target_path {shlex.quote(scene)} "
-                    f"--llm_addr localhost --llm_port {args.vlm_port} --llm_name {shlex.quote(args.vlm)}"
+                    f"--llm_addr localhost --llm_port {args.vlm_port} --llm_name {shlex.quote(DEFAULT_VLM)}"
                 ),
             )
 
@@ -1163,11 +1153,6 @@ def add_action_parsers(parser: argparse.ArgumentParser) -> None:
     run_parser.add_argument("--batchsize", type=int, default=4, help="Per-GPU 3DGS training batch size.")
     # Differs from upstream 8-GPU example max_steps=1500; local runs usually trade more steps for fewer GPUs.
     run_parser.add_argument("--seed", type=int, default=42)
-    run_parser.add_argument(
-        "--vlm",
-        default=DEFAULT_VLM,
-        help="VLM model id served by the local shim. Relative values are resolved under /models.",
-    )
     run_parser.add_argument("--vlm-port", type=int, default=8000)
     # Local wrapper only: upstream starts the OpenAI-compatible VLM server separately.
     run_parser.add_argument("--skip-existing", action="store_true", help="Pass --skip_exist to resumable worldgen stages.")

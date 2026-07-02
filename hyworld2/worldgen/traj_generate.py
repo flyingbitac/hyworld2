@@ -277,8 +277,8 @@ if __name__ == '__main__':
                     {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{base64_image}"}},
                 ]}
             ]
-            print(f"Qwen3-VL labeling meta information for {scene_path}...")
-            with timer.track("Qwen3-VL labeling meta information"):
+            print(f"VLM labeling meta information for {scene_path}...")
+            with timer.track("VLM labeling meta information"):
                 response = client.chat.completions.create(model=MODEL_NAME, messages=messages, max_tokens=1024, temperature=0.0, seed=1024)
                 clean_text = response.choices[0].message.content.strip().replace('[', '').replace(']', '').replace('"', '').replace("'", "").replace("```json", "").replace("```", "")
             meta_info["scene_type"] = clean_text
@@ -693,8 +693,8 @@ if __name__ == '__main__':
                             {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{base64_image}"}},
                         ]}
                     ]
-                    print(f"Qwen3-VL labeling for {scene_path}...")
-                    with timer.track("Qwen3-VL labeling objects"):
+                    print(f"VLM labeling for {scene_path}...")
+                    with timer.track("VLM labeling objects"):
                         response = client.chat.completions.create(model=MODEL_NAME, messages=messages, max_tokens=1024, temperature=0.0, seed=1024)
                         clean_text = response.choices[0].message.content.strip().replace('[', '').replace(']', '').replace('"', '').replace("'", "").replace("```json", "").replace("```", "").replace("-", "_")
                         unique_objects = deduplicate_ordered([item.strip() for item in clean_text.split(',') if item.strip()])
