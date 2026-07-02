@@ -32,8 +32,6 @@ CONDA = "/opt/miniconda3/bin/conda"
 FLUX_PANORAMA_LORA_REPO = "crafiq/flux-2-klein-9b-360-panorama-lora"
 FLUX_PANORAMA_LORA_DIR = "flux-2-klein-9b-360-panorama-lora"
 FLUX_PANORAMA_LORA_WEIGHT = "flux-2-klein-9b-360-panorama-lora.safetensors"
-DINO_TORCH_HUB_REPO = "https://github.com/facebookresearch/dinov2"
-DINO_TORCH_HUB_DIR = "facebookresearch_dinov2_main"
 MODEL_DOWNLOADS = (
     ("black-forest-labs/FLUX.2-klein-9B", "black-forest-labs/FLUX.2-klein-9B", "FLUX.2-klein-9B", ()),
     (
@@ -384,30 +382,6 @@ def direct_hf_download_required_files(hf_id: str, local_dir: Path, required_file
         tmp_target.replace(target)
 
 
-def download_dino_torch_hub_source(root: Path, *, dry_run: bool, force: bool) -> None:
-    local_dir = root / DINO_TORCH_HUB_DIR
-    hubconf = local_dir / "hubconf.py"
-    clone_command = ["git", "clone", "--depth", "1", DINO_TORCH_HUB_REPO, str(local_dir)]
-    if dry_run:
-        if hubconf.is_file() and not force:
-            print(f"[DOWNLOAD] skip existing: {local_dir}", flush=True)
-            return
-        if force and local_dir.exists():
-            print("+", shlex.join(["rm", "-rf", str(local_dir)]), flush=True)
-        print("+", shlex.join(clone_command), flush=True)
-        return
-    if hubconf.is_file() and not force:
-        print(f"[DOWNLOAD] skip existing: {local_dir}", flush=True)
-        return
-    if local_dir.exists():
-        if not force:
-            raise RuntimeError(f"DINOv2 source exists but is incomplete: {local_dir}")
-        shutil.rmtree(local_dir)
-    if shutil.which("git") is None:
-        raise RuntimeError("`git` is required to download facebookresearch/dinov2 torch hub source.")
-    run(clone_command)
-
-
 def docker_available() -> None:
     if not capture(["docker", "version", "--format", "{{.Server.Version}}"]):
         raise RuntimeError("Docker is not available or the current user cannot access the Docker daemon.")
@@ -624,7 +598,6 @@ def download_models(args: argparse.Namespace) -> None:
                     flush=True,
                 )
                 direct_hf_download_required_files(hf_id, local_dir, required_files, args.hf_endpoint)
-    download_dino_torch_hub_source(root, dry_run=args.dry_run, force=args.force)
 
 
 def docker_exec(args: argparse.Namespace, command: str) -> None:

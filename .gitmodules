@@ -1,3 +1,6 @@
 [submodule "hyworld2/worldgen/third_party/recastnavigation"]
 	path = hyworld2/worldgen/third_party/recastnavigation
 	url = https://github.com/recastnavigation/recastnavigation.git
+[submodule "third_party/dinov2"]
+	path = third_party/dinov2
+	url = https://github.com/facebookresearch/dinov2.git

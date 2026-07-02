@@ -27,7 +27,7 @@ class Dino(torch.nn.Module):
             backbone_kwargs = {}
         backbone_kwargs.setdefault("pretrained", False)
         if repo_or_dir is None:
-            repo_or_dir = os.environ.get("DINO_MODEL", "/models/facebookresearch_dinov2_main")
+            repo_or_dir = os.environ.get("DINO_MODEL", "/workspace/hyworld2/third_party/dinov2")
 
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -39,8 +39,8 @@ class Dino(torch.nn.Module):
             if source == "local" and not os.path.exists(os.path.join(repo_or_dir, "hubconf.py")):
                 raise FileNotFoundError(
                     f"DINO torch hub source not found at {repo_or_dir}. "
-                    "Run `python docker.py download --path ./models` or set DINO_MODEL "
-                    "to a local facebookresearch/dinov2 checkout with hubconf.py."
+                    "Initialize submodules or set DINO_MODEL to a local "
+                    "facebookresearch/dinov2 checkout with hubconf.py."
                 )
             self.backbone = torch.hub.load(
                 repo_or_dir=repo_or_dir,

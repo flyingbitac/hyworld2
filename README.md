@@ -25,7 +25,7 @@
 | ZIM Anything ViT-L | WorldNav mask refinement | `/models/zim-anything-vitl`，使用 `zim_vit_l_2092/` 子目录，由 `ZIM_MODEL` 指定 | 约 1.2G | [naver-iv/zim-anything-vitl](https://www.modelscope.cn/models/naver-iv/zim-anything-vitl) | [naver-iv/zim-anything-vitl](https://huggingface.co/naver-iv/zim-anything-vitl) |
 | GroundingDINO tiny | WorldNav grounding / object mask 辅助 | `/models/grounding-dino-tiny`，由 `GROUNDING_DINO_MODEL` 指定 | 约 1.3G | [IDEA-Research/grounding-dino-tiny](https://www.modelscope.cn/models/IDEA-Research/grounding-dino-tiny) | [IDEA-Research/grounding-dino-tiny](https://huggingface.co/IDEA-Research/grounding-dino-tiny) |
 | DINOv2 base | WorldMirror memory-bank camera selector | `/models/dinov2-base`，由 `CAMERA_SELECTOR_MODEL` 指定 | 约 0.7G | [facebook/dinov2-base](https://www.modelscope.cn/models/facebook/dinov2-base) | [facebook/dinov2-base](https://huggingface.co/facebook/dinov2-base) |
-| DINOv2 torch hub source | SAM3D object condition embedder 的模型结构源码；权重由 SAM3D checkpoint 加载 | `/models/facebookresearch_dinov2_main`，由 `DINO_MODEL` 指定 | 约 0.1G | 不适用；`download` 会 clone GitHub 源码 | [facebookresearch/dinov2](https://github.com/facebookresearch/dinov2) |
+| DINOv2 torch hub source | SAM3D object condition embedder 的模型结构源码；权重由 SAM3D checkpoint 加载 | `/workspace/hyworld2/third_party/dinov2`，由 `DINO_MODEL` 指定 | 约 0.1G | git submodule | [facebookresearch/dinov2](https://github.com/facebookresearch/dinov2) |
 | BiRefNet | `text2scene.py` 物体图像背景移除，生成 SAM3D 所需 RGBA | `/models/BiRefNet` | 约 1G | [AI-ModelScope/ZhengPeng7-BiRefNet](https://www.modelscope.cn/models/AI-ModelScope/ZhengPeng7-BiRefNet) | [ZhengPeng7/BiRefNet](https://huggingface.co/ZhengPeng7/BiRefNet) |
 
 ## Docker 运行步骤
@@ -34,6 +34,9 @@
 
 ```bash
 cd /home/zxh/ws/hyworld2
+
+# 初始化 recastnavigation 和 DINOv2 等 third_party submodule
+git submodule update --init --recursive
 
 # 已发布镜像路径：拉取后会自动 retag 为 hyworld2-base:v1.0
 python docker.py pull
@@ -72,7 +75,7 @@ python docker.py download --path ./models
 python docker.py download --path ./models --dry-run
 ```
 
-该命令会先调用 `modelscope download --model <model-id> --local_dir <target-dir>`；如果 ModelScope 没有对应 repo，会自动 fallback 到 `hf download <repo-id> --local-dir <target-dir>`，并设置 `HF_ENDPOINT=https://hf-mirror.com`。最后会 clone `facebookresearch/dinov2` 到 `/models/facebookresearch_dinov2_main`，供 SAM3D 按 torch hub 结构加载 DINOv2。如果不激活 conda 环境，也可以直接用装了 ModelScope/Hugging Face Hub 和 git 的解释器运行，例如 `/home/zxh/miniconda3/envs/torch/bin/python docker.py download --path ./models`。
+该命令会先调用 `modelscope download --model <model-id> --local_dir <target-dir>`；如果 ModelScope 没有对应 repo，会自动 fallback 到 `hf download <repo-id> --local-dir <target-dir>`，并设置 `HF_ENDPOINT=https://hf-mirror.com`。DINOv2 torch hub 源码不在 `download` 阶段写入 `models/`，而是通过 `third_party/dinov2` git submodule 提供。如果不激活 conda 环境，也可以直接用装了 ModelScope/Hugging Face Hub 的解释器运行，例如 `/home/zxh/miniconda3/envs/torch/bin/python docker.py download --path ./models`。
 
 ### 3. 使用 `docker.py run` 一键执行
 
