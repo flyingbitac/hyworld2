@@ -24,7 +24,7 @@ DEFAULT_BIREFNET_MODEL = "/models/BiRefNet"
 CONTAINER_CACHE_EXPORT = (
     "export HF_MODULES_CACHE=/tmp/hyworld2_hf_modules "
     "TRANSFORMERS_CACHE=/tmp/hyworld2_transformers_cache "
-    "DINO_MODEL=/models/dinov2-with-registers-large; "
+    "DINO_MODEL=/models/facebookresearch_dinov2_main; "
 )
 VALID_STAGES = {"parse", "worldgen", "object-image", "objgen", "calibrate"}
 RUNNAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")

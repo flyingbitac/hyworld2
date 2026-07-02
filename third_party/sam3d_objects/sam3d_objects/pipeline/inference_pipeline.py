@@ -414,7 +414,6 @@ class InferencePipeline:
                     "_base_models.condition_embedder."
                 ),
                 device=self.device,
-                strict=False,
             )
         else:
             return None
