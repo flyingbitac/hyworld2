@@ -20,4 +20,7 @@ examples/**/meta_info.json
 examples/**/navmesh/
 examples/**/objects.json
 examples/**/render_results/
-/models/
+models/
+examples/worldgen
+!examples/worldgen/case000
+!examples/worldgen/case001
