@@ -28,6 +28,8 @@ ENV CONDA_DIR=${CONDA_DIR}
 ENV HYWORLD_ROOT=/workspace/hyworld2
 ENV HF_HOME=/models/.cache/huggingface
 ENV HUGGINGFACE_HUB_CACHE=/models/.cache/huggingface/hub
+ENV HF_MODULES_CACHE=/tmp/hyworld2_hf_modules
+ENV TRANSFORMERS_CACHE=/tmp/hyworld2_transformers_cache
 ENV TORCH_HOME=/models/.cache/torch
 ENV PIP_NO_CACHE_DIR=1
 ENV PIP_ROOT_USER_ACTION=ignore
@@ -174,6 +176,7 @@ ENV MOGE_MODEL=/models/moge-2-vitl-normal
 ENV ZIM_MODEL=/models/zim-anything-vitl
 ENV GROUNDING_DINO_MODEL=/models/grounding-dino-tiny
 ENV CAMERA_SELECTOR_MODEL=/models/dinov2-base
+ENV DINO_MODEL=/models/dinov2-with-registers-large
 ENV WS_TEXT_DTYPE=bf16
 ENV WS_AUX_OFFLOAD=1
 ENV WORLDMIRROR_NPROC_PER_NODE=1
@@ -186,6 +189,15 @@ RUN chmod 777 /root
 # rtree: required by NavMesh reconstruction (--apply_recon_iteration, Stage 1).
 RUN "${CONDA_DIR}/bin/conda" run --no-capture-output -n hyworld2 python -m pip install \
         -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple rtree
+
+# Object-generation runtime extension. Keep this as an appended layer so existing
+# worldgen image layers remain reusable.
+RUN "${CONDA_DIR}/bin/conda" run --no-capture-output -n hyworld2 python -m pip install \
+        astor==0.8.1 hydra-core==1.3.2 lightning==2.3.3 optree==0.14.1 seaborn==0.13.2 setuptools==80.9.0 spconv-cu121==2.3.8 \
+    && "${CONDA_DIR}/bin/conda" run --no-capture-output -n hyworld2 python -m pip install \
+        -e third_party/sam3d_objects --no-deps --no-build-isolation \
+    && "${CONDA_DIR}/bin/conda" run --no-capture-output -n hyworld2 python -c \
+        "import sam3d_objects, hydra, seaborn; from hyworld2.objgen.inference import Inference; print('objgen build check ok', sam3d_objects.__file__, Inference.__name__)"
 
 # VLM server for WorldNav (stages 1-2). scripts/launch_vlm.sh serves
 # Qwen3.5-4B through the lightweight transformers OpenAI-compatible shim.

@@ -49,6 +49,7 @@ MODEL_DOWNLOADS = (
     ),
     (DEFAULT_VLM, DEFAULT_VLM, DEFAULT_VLM, ()),
     ("facebook/sam3", "facebook/sam3", "sam3", ()),
+    ("facebook/sam-3d-objects", "facebook/sam-3d-objects", "sam-3d-objects", ()),
     ("hanshanxue/WorldStereo", "hanshanxue/WorldStereo", "WorldStereo", ("worldstereo-memory-dmd/*",)),
     (
         "Wan-AI/Wan2.1-I2V-14B-480P-Diffusers",
@@ -60,6 +61,13 @@ MODEL_DOWNLOADS = (
     ("naver-iv/zim-anything-vitl", "naver-iv/zim-anything-vitl", "zim-anything-vitl", ()),
     ("IDEA-Research/grounding-dino-tiny", "IDEA-Research/grounding-dino-tiny", "grounding-dino-tiny", ()),
     ("facebook/dinov2-base", "facebook/dinov2-base", "dinov2-base", ()),
+    (
+        "facebook/dinov2-with-registers-large",
+        "facebook/dinov2-with-registers-large",
+        "dinov2-with-registers-large",
+        (),
+    ),
+    ("AI-ModelScope/ZhengPeng7-BiRefNet", "ZhengPeng7/BiRefNet", "BiRefNet", ()),
 )
 HY_WORLD_REQUIRED_FILES = (
     "HY-Pano-2.0/pytorch_lora_weights.safetensors",
@@ -73,6 +81,28 @@ MODEL_REQUIRED_FILES = {
     "HY-World-2.0": HY_WORLD_REQUIRED_FILES,
     DEFAULT_VLM: ("config.json",),
     "sam3": ("config.json",),
+    "sam-3d-objects": (
+        "configuration.json",
+        "checkpoints/pipeline.yaml",
+        "checkpoints/ss_generator.yaml",
+        "checkpoints/ss_generator.ckpt",
+        "checkpoints/slat_generator.yaml",
+        "checkpoints/slat_generator.ckpt",
+        "checkpoints/ss_decoder.yaml",
+        "checkpoints/ss_decoder.ckpt",
+        "checkpoints/ss_encoder.yaml",
+        "checkpoints/ss_encoder.ckpt",
+        "checkpoints/ss_encoder.safetensors",
+        "checkpoints/slat_decoder_gs.yaml",
+        "checkpoints/slat_decoder_gs.ckpt",
+        "checkpoints/slat_decoder_gs_4.yaml",
+        "checkpoints/slat_decoder_gs_4.ckpt",
+        "checkpoints/slat_decoder_mesh.yaml",
+        "checkpoints/slat_decoder_mesh.ckpt",
+        "checkpoints/slat_decoder_mesh.pt",
+        "checkpoints/slat_encoder.yaml",
+        "checkpoints/slat_encoder.ckpt",
+    ),
     "WorldStereo": ("worldstereo-memory-dmd/config.json", "worldstereo-memory-dmd/model.safetensors"),
     "Wan2.1-I2V-14B-480P-Diffusers": ("model_index.json",),
     "moge-2-vitl-normal": ("model.pt",),
@@ -86,6 +116,8 @@ MODEL_REQUIRED_FILES = {
         "vocab.txt",
     ),
     "dinov2-base": ("config.json", "preprocessor_config.json", "model.safetensors"),
+    "dinov2-with-registers-large": ("config.json", "preprocessor_config.json", "model.safetensors"),
+    "BiRefNet": ("config.json",),
 }
 
 

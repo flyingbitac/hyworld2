@@ -24,3 +24,4 @@ models/
 examples/worldgen
 !examples/worldgen/case000
 !examples/worldgen/case001
+examples/text2scene
