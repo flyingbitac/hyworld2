@@ -3,6 +3,7 @@ import copy
 import json
 import math
 import os
+import re
 import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from glob import glob
@@ -83,6 +84,118 @@ ZIM_SUBFOLDER = "zim_vit_l_2092"
 GD_REPO_ID = os.environ.get("GROUNDING_DINO_MODEL", "/models/grounding-dino-tiny")
 SAM3_REPO_ID = os.environ.get("SAM3_REPO_ID", "facebook/sam3")
 MOGE_ID = os.environ.get("MOGE_MODEL", "/models/moge-2-vitl-normal")
+STRICT_OBJECT_RETRY_INSTRUCTION = (
+    "\n\nYour previous answer was invalid. Return only a JSON array like "
+    "[\"pillar\", \"door\"]. Do not include analysis, criteria, bullets, "
+    "markdown, or sentences. Use only object names with at most 4 words. "
+    "Return [] if there are no valid objects."
+)
+
+
+def _strip_json_fence(text: str) -> str:
+    text = text.strip()
+    match = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", text, flags=re.IGNORECASE | re.DOTALL)
+    return match.group(1).strip() if match else text
+
+
+def _find_json_array_span(text: str) -> tuple[int, int] | None:
+    start = text.find("[")
+    while start != -1:
+        depth = 0
+        in_string = False
+        escape = False
+        for index in range(start, len(text)):
+            char = text[index]
+            if in_string:
+                if escape:
+                    escape = False
+                elif char == "\\":
+                    escape = True
+                elif char == '"':
+                    in_string = False
+                continue
+            if char == '"':
+                in_string = True
+            elif char == "[":
+                depth += 1
+            elif char == "]":
+                depth -= 1
+                if depth == 0:
+                    return start, index + 1
+        start = text.find("[", start + 1)
+    return None
+
+
+def extract_json_array(text: str) -> list:
+    text = _strip_json_fence(text)
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        span = _find_json_array_span(text)
+        if span is None:
+            raise ValueError("VLM output does not contain a JSON array")
+        data = json.loads(text[span[0]:span[1]])
+    if not isinstance(data, list):
+        raise ValueError("VLM output is not a JSON array")
+    return data
+
+
+def parse_object_list(text: str) -> list[str]:
+    data = extract_json_array(text)
+    objects = []
+    explanation_markers = (
+        "the user",
+        "i need",
+        "inclusion criteria",
+        "exclusion criteria",
+        "candidate",
+        "provided panoramic image",
+        "the image shows",
+        "the prompt",
+    )
+    for item in data:
+        if not isinstance(item, str):
+            raise ValueError("VLM object list must contain only strings")
+        clean = item.strip().strip("\"'`*").replace("-", "_")
+        clean = re.sub(r"\s+", " ", clean).strip(" .,:;")
+        if not clean:
+            continue
+        lower = clean.lower()
+        if any(marker in lower for marker in explanation_markers):
+            continue
+        if any(char in clean for char in "\n\r"):
+            continue
+        if len(clean.split()) > 4:
+            continue
+        objects.append(clean)
+    unique_objects = deduplicate_ordered(objects)
+    if data and not unique_objects:
+        raise ValueError("VLM object list did not contain any valid navigation objects")
+    return unique_objects
+
+
+def parse_scene_type(text: str) -> str:
+    clean = _strip_json_fence(text).strip().strip("\"'`[]").lower()
+    clean = clean.replace(".", " ").strip()
+    if clean in ("indoor", "outdoor"):
+        return clean
+    matches = re.findall(r"\b(indoor|outdoor)\b", clean)
+    if len(set(matches)) == 1 and len(clean.split()) <= 8:
+        return matches[0]
+    raise ValueError(f"Invalid scene type from VLM output: {text!r}")
+
+
+def build_object_messages(base64_image: str, *, force_vlm: bool, retry: bool = False) -> list[dict]:
+    instruction = get_navigation_instruction(force_vlm)
+    if retry:
+        instruction += STRICT_OBJECT_RETRY_INSTRUCTION
+    return [
+        {"role": "system", "content": "You are a robot navigation assistant."},
+        {"role": "user", "content": [
+            {"type": "text", "text": instruction},
+            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{base64_image}"}},
+        ]}
+    ]
 
 
 def resolve_hf_checkpoint(repo_id, allow_patterns=None, subfolder=None, required_files=None):
@@ -280,8 +393,8 @@ if __name__ == '__main__':
             print(f"VLM labeling meta information for {scene_path}...")
             with timer.track("VLM labeling meta information"):
                 response = client.chat.completions.create(model=MODEL_NAME, messages=messages, max_tokens=1024, temperature=0.0, seed=1024)
-                clean_text = response.choices[0].message.content.strip().replace('[', '').replace(']', '').replace('"', '').replace("'", "").replace("```json", "").replace("```", "")
-            meta_info["scene_type"] = clean_text
+                scene_type = parse_scene_type(response.choices[0].message.content)
+            meta_info["scene_type"] = scene_type
             with open(f"{scene_path}/meta_info.json", "w") as write:
                 json.dump(meta_info, write, indent=2)
 
@@ -686,18 +799,23 @@ if __name__ == '__main__':
             if not (args.skip_exist and os.path.exists(os.path.join(scene_path, "objects.json"))):
                 try:
                     base64_image = pil_image_to_base64(full_img)
-                    messages = [
-                        {"role": "system", "content": "You are a robot navigation assistant."},
-                        {"role": "user", "content": [
-                            {"type": "text", "text": get_navigation_instruction(args.force_vlm)},
-                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{base64_image}"}},
-                        ]}
-                    ]
+                    messages = build_object_messages(base64_image, force_vlm=args.force_vlm)
                     print(f"VLM labeling for {scene_path}...")
                     with timer.track("VLM labeling objects"):
                         response = client.chat.completions.create(model=MODEL_NAME, messages=messages, max_tokens=1024, temperature=0.0, seed=1024)
-                        clean_text = response.choices[0].message.content.strip().replace('[', '').replace(']', '').replace('"', '').replace("'", "").replace("```json", "").replace("```", "").replace("-", "_")
-                        unique_objects = deduplicate_ordered([item.strip() for item in clean_text.split(',') if item.strip()])
+                        try:
+                            unique_objects = parse_object_list(response.choices[0].message.content)
+                        except ValueError as parse_error:
+                            rank0_log(f"  VLM object output invalid, retrying with strict JSON prompt: {parse_error}", "WARNING")
+                            retry_messages = build_object_messages(base64_image, force_vlm=args.force_vlm, retry=True)
+                            retry_response = client.chat.completions.create(
+                                model=MODEL_NAME,
+                                messages=retry_messages,
+                                max_tokens=256,
+                                temperature=0.0,
+                                seed=1025,
+                            )
+                            unique_objects = parse_object_list(retry_response.choices[0].message.content)
                     with open(os.path.join(scene_path, "objects.json"), "w") as f:
                         json.dump(unique_objects, f, indent=4)
                 except Exception as e:

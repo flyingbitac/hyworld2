@@ -2928,7 +2928,7 @@ def get_navigation_instruction(force_vlm=False):
         "- **High Objects:** Items out of reach such as rooftops, ceiling fixtures, the sky, etc.\n"
         "- **Vague Background:** Distant scenery like mountains and horizon lines.\n"
 
-        "\nOutput the result strictly as a JSON list of strings.\n"
+        "\nReturn ONLY a valid JSON array of strings. No markdown. No explanation.\n"
     )
 
     if force_vlm:

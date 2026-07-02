@@ -39,7 +39,7 @@ ENV LD_LIBRARY_PATH=${CUDA_HOME}/lib64
 ENV TORCH_CUDA_ARCH_LIST=${CUDA_ARCH_LIST}
 ENV CMAKE_CUDA_ARCHITECTURES=${CUDA_ARCHITECTURES}
 ENV CUDAARCHS=${CUDA_ARCHITECTURES}
-ENV MAX_JOBS=8
+ENV MAX_JOBS=24
 ENV INSTALL_WORLDGEN_EXTRAS=${INSTALL_WORLDGEN_EXTRAS}
 
 # System packages needed by CUDA extensions, rendering utilities, navmesh, and
@@ -83,50 +83,55 @@ WORKDIR ${HYWORLD_ROOT}
 # Main worldgen environment.
 RUN set -euo pipefail \
     && "${CONDA_DIR}/bin/conda" create -y -n hyworld2 python=3.11.15 pip \
-    && "${CONDA_DIR}/bin/conda" run -n hyworld2 python -m pip install --upgrade pip setuptools wheel \
-    && "${CONDA_DIR}/bin/conda" run -n hyworld2 python -m pip install \
+    && "${CONDA_DIR}/bin/conda" run --no-capture-output -n hyworld2 python -m pip config set global.index-url https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple \
+    && "${CONDA_DIR}/bin/conda" run --no-capture-output -n hyworld2 python -m pip install --upgrade pip setuptools wheel \
+    && "${CONDA_DIR}/bin/conda" run --no-capture-output -n hyworld2 python -m pip install \
         torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 \
-        --index-url https://download.pytorch.org/whl/cu128 \
+        --index-url https://mirrors.nju.edu.cn/pytorch/whl/cu128 \
     && grep -v '^cupy==' requirements.txt > /tmp/requirements-hyworld2.txt \
-    && "${CONDA_DIR}/bin/conda" run -n hyworld2 python -m pip install cupy-cuda12x==13.6.0 \
-    && "${CONDA_DIR}/bin/conda" run -n hyworld2 python -m pip install -r /tmp/requirements-hyworld2.txt \
-    && "${CONDA_DIR}/bin/conda" run -n hyworld2 python -m pip uninstall -y onnxruntime-gpu \
-    && "${CONDA_DIR}/bin/conda" run -n hyworld2 python -m pip install onnxruntime==1.22.1 \
+    && "${CONDA_DIR}/bin/conda" run --no-capture-output -n hyworld2 python -m pip install cupy-cuda12x==13.6.0 \
+        --index-url https://mirrors.nju.edu.cn/pypi/web/simple/ \
+    && "${CONDA_DIR}/bin/conda" run --no-capture-output -n hyworld2 python -m pip install -r /tmp/requirements-hyworld2.txt \
+        --index-url https://mirrors.nju.edu.cn/pypi/web/simple/ \
+    && "${CONDA_DIR}/bin/conda" run --no-capture-output -n hyworld2 python -m pip uninstall -y onnxruntime-gpu \
+    && "${CONDA_DIR}/bin/conda" run --no-capture-output -n hyworld2 python -m pip install onnxruntime==1.22.1 \
     && cd hyworld2/worldgen/third_party/gsplat_maskgaussian \
-    && "${CONDA_DIR}/bin/conda" run -n hyworld2 python -m pip install -e . --no-build-isolation \
+    && "${CONDA_DIR}/bin/conda" run --no-capture-output -n hyworld2 python -m pip install -e . --no-build-isolation \
     && cd "${HYWORLD_ROOT}" \
     && if [[ "${INSTALL_FLASH_ATTN}" == "1" ]]; then \
-        "${CONDA_DIR}/bin/conda" run -n hyworld2 python -m pip install "${FLASH_ATTN_WHEEL_URL}"; \
+        "${CONDA_DIR}/bin/conda" run --no-capture-output -n hyworld2 python -m pip install "${FLASH_ATTN_WHEEL_URL}"; \
     fi \
     && if [[ "${INSTALL_WORLDGEN_EXTRAS}" == "1" ]]; then \
         FORCE_CUDA=1 MAX_JOBS=4 CMAKE_BUILD_PARALLEL_LEVEL=4 \
-            "${CONDA_DIR}/bin/conda" run -n hyworld2 python -m pip install --no-build-isolation -r requirements_git.txt; \
+            "${CONDA_DIR}/bin/conda" run --no-capture-output -n hyworld2 python -m pip install --no-build-isolation -r requirements_git.txt; \
         cd hyworld2/worldgen/third_party/navmesh; \
         RECAST_PATH="${HYWORLD_ROOT}/hyworld2/worldgen/third_party/recastnavigation" \
-            "${CONDA_DIR}/bin/conda" run -n hyworld2 python -m pip install . --no-build-isolation; \
+            "${CONDA_DIR}/bin/conda" run --no-capture-output -n hyworld2 python -m pip install . --no-build-isolation; \
         cd "${HYWORLD_ROOT}"; \
     fi \
     && "${CONDA_DIR}/bin/conda" clean -afy
 
 # Panorama/VLM environment.
 RUN "${CONDA_DIR}/bin/conda" create -y -n hyworld2-pano python=3.10 pip \
-    && "${CONDA_DIR}/bin/conda" run -n hyworld2-pano python -m pip install --upgrade pip setuptools wheel \
-    && "${CONDA_DIR}/bin/conda" run -n hyworld2-pano python -m pip install \
+    && "${CONDA_DIR}/bin/conda" run --no-capture-output -n hyworld2-pano python -m pip config set global.index-url https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple \
+    && "${CONDA_DIR}/bin/conda" run --no-capture-output -n hyworld2-pano python -m pip install --upgrade pip setuptools wheel \
+    && "${CONDA_DIR}/bin/conda" run --no-capture-output -n hyworld2-pano python -m pip install \
         torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 \
-        --index-url https://download.pytorch.org/whl/cu128 \
-    && "${CONDA_DIR}/bin/conda" run -n hyworld2-pano python -m pip install -r hyworld2/panogen/requirements.txt \
-    && "${CONDA_DIR}/bin/conda" run -n hyworld2-pano python -m pip install peft==0.18.1 \
+        --index-url https://mirrors.nju.edu.cn/pytorch/whl/cu128 \
+    && "${CONDA_DIR}/bin/conda" run --no-capture-output -n hyworld2-pano python -m pip install -r hyworld2/panogen/requirements.txt \
+    && "${CONDA_DIR}/bin/conda" run --no-capture-output -n hyworld2-pano python -m pip install peft==0.18.1 \
     && "${CONDA_DIR}/bin/conda" clean -afy
 
 # FLUX.2 Klein text-to-image environment. Keep this separate from hyworld2-pano:
 # Klein needs the current Diffusers Flux2KleinPipeline, while HY-Pano currently
 # pins diffusers/safetensors versions through hunyuan-image-3.
 RUN "${CONDA_DIR}/bin/conda" create -y -n flux2 python=3.10 pip \
-    && "${CONDA_DIR}/bin/conda" run -n flux2 python -m pip install --upgrade pip setuptools wheel \
-    && "${CONDA_DIR}/bin/conda" run -n flux2 python -m pip install \
+    && "${CONDA_DIR}/bin/conda" run --no-capture-output -n flux2 python -m pip config set global.index-url https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple \
+    && "${CONDA_DIR}/bin/conda" run --no-capture-output -n flux2 python -m pip install --upgrade pip setuptools wheel \
+    && "${CONDA_DIR}/bin/conda" run --no-capture-output -n flux2 python -m pip install \
         torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 \
-        --index-url https://download.pytorch.org/whl/cu128 \
-    && "${CONDA_DIR}/bin/conda" run -n flux2 python -m pip install \
+        --index-url https://mirrors.nju.edu.cn/pytorch/whl/cu128 \
+    && "${CONDA_DIR}/bin/conda" run --no-capture-output -n flux2 python -m pip install \
         git+https://github.com/huggingface/diffusers.git \
         transformers==4.57.1 accelerate bitsandbytes safetensors sentencepiece protobuf \
     && "${CONDA_DIR}/bin/conda" clean -afy
@@ -144,12 +149,12 @@ ENV PYTHONPATH=/workspace/hyworld2:/workspace/hyworld2/hyworld2/worldgen:/worksp
 
 # Build-time smoke tests catch missing compiled modules before the image is used
 # for long worldgen jobs.
-RUN "${CONDA_DIR}/bin/conda" run -n hyworld2 python -c \
+RUN "${CONDA_DIR}/bin/conda" run --no-capture-output -n hyworld2 python -c \
         "import os, torch, diffusers, transformers; __import__('recast') if os.environ.get('INSTALL_WORLDGEN_EXTRAS', '1') == '1' else None; import hyworld2.worldrecon.pipeline; print('hyworld2 build check ok', torch.__version__, diffusers.__version__, transformers.__version__)" \
     && cd hyworld2/panogen \
-    && "${CONDA_DIR}/bin/conda" run -n hyworld2-pano python -c \
+    && "${CONDA_DIR}/bin/conda" run --no-capture-output -n hyworld2-pano python -c \
         "import torch, pipeline, pipeline_with_qwen_image; print('hyworld2-pano build check ok', torch.__version__)" \
-    && "${CONDA_DIR}/bin/conda" run -n flux2 python -c \
+    && "${CONDA_DIR}/bin/conda" run --no-capture-output -n flux2 python -c \
         "import torch; from diffusers import Flux2KleinPipeline; print('flux2 build check ok', torch.__version__, Flux2KleinPipeline.__name__)"
 
 # Keep HF cache under /models for libraries that still need metadata, while the
@@ -179,7 +184,7 @@ ENV WORLDMIRROR_CUDA_VISIBLE_DEVICES=0
 RUN chmod 777 /root
 
 # rtree: required by NavMesh reconstruction (--apply_recon_iteration, Stage 1).
-RUN "${CONDA_DIR}/bin/conda" run -n hyworld2 python -m pip install \
+RUN "${CONDA_DIR}/bin/conda" run --no-capture-output -n hyworld2 python -m pip install \
         -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple rtree
 
 # VLM server for WorldNav (stages 1-2). scripts/launch_vlm.sh serves

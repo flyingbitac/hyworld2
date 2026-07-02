@@ -10,8 +10,8 @@
 - Stage5 验证指标：PSNR `25.74`，SSIM `0.748`，LPIPS `0.302`，Gaussians `612349`。
 - Panogen Qwen-Image-Edit 已完成阶段级 GPU profile：fresh container 中使用 `--load-strategy balanced`，GPU0 峰值 `5489 MiB` / 平均利用率 `35.13%`，GPU1 峰值 `16453 MiB` / 平均利用率 `0.37%`。
 - Stage1 skip-existing 已完成阶段级 GPU profile：单卡，使用 Dockerfile 构建出的 fresh container 和 PyTorch3D CUDA rasterizer，GPU0 峰值 `9801 MiB` / 平均利用率 `13.28%`，GPU1 空闲。
-- Stage1 true-VLM 已完成阶段级 GPU profile：fresh container 中临时 scene 从 `panorama.png` 重新生成 trajectory，GPU0 跑 `traj_generate.py`，GPU1 跑 Qwen3-VL shim；GPU0 峰值 `11213 MiB` / 平均利用率 `8.15%`，GPU1 峰值 `17995 MiB` / 平均利用率 `2.20%`。
-- Stage2 已完成阶段级 GPU profile：fresh container 中 GPU0 单进程点云渲染 + GPU1 Qwen3-VL shim caption，GPU0 峰值 `3895 MiB` / 平均利用率 `45.85%`，GPU1 峰值 `18395 MiB` / 平均利用率 `40.55%`。
+- Stage1 true-VLM 已完成阶段级 GPU profile：fresh container 中临时 scene 从 `panorama.png` 重新生成 trajectory，GPU0 跑 `traj_generate.py`，GPU1 跑 Qwen3.5-4B shim；GPU0 峰值 `11213 MiB` / 平均利用率 `8.15%`，GPU1 峰值 `17995 MiB` / 平均利用率 `2.20%`。
+- Stage2 已完成阶段级 GPU profile：fresh container 中 GPU0 单进程点云渲染 + GPU1 Qwen3.5-4B shim caption，GPU0 峰值 `3895 MiB` / 平均利用率 `45.85%`，GPU1 峰值 `18395 MiB` / 平均利用率 `40.55%`。
 - Stage3 resume/load 已完成阶段级 GPU profile：2 卡，`video_gen.py --fsdp --skip_exist` 加载 WorldStereo/FSDP 后发现 33 个已有 render 和 `aligned_pcd.ply`，跳过重算；GPU0/GPU1 峰值均为 `23621 MiB`。
 - Stage3 full attempt 已完成长跑 GPU profile：fresh container 中复制 case000 到 `/tmp/hyworld_stage3_full` 后运行 `video_gen.py --fsdp` 不带 `--skip_exist`，33 个 WorldStereo 视频、291 个 WorldMirror depth、`aligned_pcd.ply` 和 `global_pcd.ply` 均已产出；命令在长尾阶段运行 `2788.561s` 后由人工 SIGTERM，GPU0 峰值 `32069 MiB` / 平均利用率 `73.32%`，GPU1 峰值 `32107 MiB` / 平均利用率 `74.31%`。
 - Stage3 WorldMirror fallback 已完成组件级 GPU profile：单卡，291 张图，target size `512`，GPU0 峰值 `14081 MiB` / 平均利用率 `35.11%`，GPU1 空闲。
@@ -115,7 +115,7 @@ CUDA_VISIBLE_DEVICES=0 /opt/miniconda3/bin/conda run --no-capture-output -n hywo
     --target_path "$SCENE" \
     --llm_addr localhost \
     --llm_port 8000 \
-    --llm_name Qwen/Qwen3-VL-8B-Instruct \
+    --llm_name Qwen/Qwen3.5-4B \
     --apply_nav_traj \
     --apply_up_route \
     --apply_recon_iteration \
@@ -130,7 +130,7 @@ CUDA_VISIBLE_DEVICES=0 /opt/miniconda3/bin/conda run --no-capture-output -n hywo
     --target_path "$SCENE" \
     --llm_addr localhost \
     --llm_port 8000 \
-    --llm_name Qwen/Qwen3-VL-8B-Instruct
+    --llm_name Qwen/Qwen3.5-4B
 ```
 
 Stage3 用 WorldStereo 扩展视频并调用 WorldMirror 生成 generation bank。Dockerfile 已默认设置本地模型路径、`WS_TEXT_DTYPE=bf16`、`WS_AUX_OFFLOAD=1` 和 WorldMirror 单卡 512 fallback；通常不需要再手动 export。
@@ -251,7 +251,7 @@ CUDA_VISIBLE_DEVICES=0 /opt/miniconda3/bin/conda run --no-capture-output -n hywo
 | Stage5 | `gsplat/cuda/_backend.py` | `shutil.rmtree(..., ignore_errors=True)` | 预编译 CUDA13 扩展导入失败后，多进程 JIT fallback 的清理 race 不再中断 | 不是显存优化 |
 | Stage1/2 | `traj_generate.py` | HF cache 跟随 `HF_HOME` / `HUGGINGFACE_HUB_CACHE`，SAM3 repo 可配置 | 支持容器默认模型挂载和本地 SAM3 | 不是显存优化 |
 | Stage1/2 | `traj_generate.py` / `traj_render.py` | CLI help 从 vLLM-specific 改为 OpenAI-compatible VLM server；Stage2 timer 文案同步改名 | 与 `scripts/launch_vlm.sh` 的 transformers/FastAPI shim 保持一致，避免保留过时 vLLM 入口语义 | 不是显存优化 |
-| Stage1/2 | `scripts/vlm_server.py` / `scripts/launch_vlm.sh` | 用 `hyworld2-pano` 环境中的 transformers + FastAPI 实现 OpenAI-compatible Qwen3-VL shim，并删除旧的 `scripts/launch_vllm.sh` | vLLM/FlashInfer 在 Blackwell 上不可用时，Stage1/2 VLM 仍可服务，且不再保留 vLLM/torch2.11/cu13 运行路径 | Stage2 caption profile 中 GPU1 峰值 `18395 MiB` |
+| Stage1/2 | `scripts/vlm_server.py` / `scripts/launch_vlm.sh` | 用 `hyworld2-pano` 环境中的 transformers + FastAPI 实现 OpenAI-compatible Qwen3.5-4B shim，并删除旧的 `scripts/launch_vllm.sh` | vLLM/FlashInfer 在 Blackwell 上不可用时，Stage1/2 VLM 仍可服务，且不再保留 vLLM/torch2.11/cu13 运行路径 | Stage2 caption profile 中 GPU1 峰值 `18395 MiB` |
 | Stage1/2 文档 | `hyworld2/worldgen/README.md` | 将 VLM 前置条件从必须 vLLM 改为 OpenAI-compatible server，并给出 `scripts/launch_vlm.sh` 示例 | 文档与 Dockerfile 内置 transformers shim 保持一致 | 不是显存优化 |
 | Pano | `panogen/pipeline_with_qwen_image.py` | 新增 `--load-strategy`：`cuda`、`balanced`、`cpu-offload`、`sequential-offload` | 允许全景生成在低显存设备上使用 diffusers offload | `balanced` profile 中 GPU0 峰值 `5489 MiB`，GPU1 峰值 `16453 MiB`；默认仍为 `cuda` |
 | Pano | `panogen/README.md` | PyTorch 安装说明从 CUDA 11.8 改为 CUDA 12.8 | 与 Dockerfile / Blackwell 环境一致 | 不是显存优化 |
@@ -273,8 +273,8 @@ CUDA_VISIBLE_DEVICES=0 /opt/miniconda3/bin/conda run --no-capture-output -n hywo
 完整测量应覆盖：
 
 1. Panogen：已采样 Qwen-Image-Edit backend，`--load-strategy balanced`，40 steps，模型从 `/models` 本地挂载读取。
-2. Stage1：已采样 `traj_generate.py --force_vlm` 的真实 Qwen3-VL shim 请求、SAM3、navmesh、up-route 和 recon-iteration 路径；另保留 `--skip_exist` 对 case000 现有输出的 Dockerfile fresh-container 验证。
-3. Stage2：已采样 `traj_render.py` 单进程 GPU0 渲染 + GPU1 Qwen3-VL shim caption；还未采样多卡渲染配置。
+2. Stage1：已采样 `traj_generate.py --force_vlm` 的真实 Qwen3.5-4B shim 请求、SAM3、navmesh、up-route 和 recon-iteration 路径；另保留 `--skip_exist` 对 case000 现有输出的 Dockerfile fresh-container 验证。
+3. Stage2：已采样 `traj_render.py` 单进程 GPU0 渲染 + GPU1 Qwen3.5-4B shim caption；还未采样多卡渲染配置。
 4. Stage3：已采样 full attempt 的实际 WorldStereo video denoise、WorldMirror depth 和 alignment/global-pcd 输出峰值；但命令未自然退出，记录为 `returncode 143` interrupted attempt。另保留 `--skip_exist` load/resume 和 standalone WorldMirror fallback profile。
 5. Stage4：`gen_gs_data.py --save_normal --split_sky`。
 6. Stage5：单卡 `world_gs_trainer ... --ssim-lambda 0`。
@@ -290,9 +290,9 @@ CUDA_VISIBLE_DEVICES=0 /opt/miniconda3/bin/conda run --no-capture-output -n hywo
 | Panogen Qwen-Image-Edit | 同上；GPU1 hosts balanced-loaded model weights | 1 | `16453 MiB` | `0.37%` | `examples/worldgen/case000/gpu_profile_panogen_qwen_balanced.json` |
 | Stage1 skip-existing | `python -u traj_generate.py --target_path case000 --apply_nav_traj --apply_up_route --apply_recon_iteration --skip_exist` | 0 | `9801 MiB` | `13.28%` | `examples/worldgen/case000/gpu_profile_stage1_skip.json` |
 | Stage1 skip-existing | 同上 | 1 | `3 MiB` | `0.00%` | `examples/worldgen/case000/gpu_profile_stage1_skip.json` |
-| Stage1 true-VLM | `CUDA_VISIBLE_DEVICES=0 python -u traj_generate.py --target_path /tmp/hyworld_stage1_vlm --apply_nav_traj --apply_up_route --apply_recon_iteration --force_vlm --llm_addr localhost --llm_port 8000 --llm_name Qwen/Qwen3-VL-8B-Instruct` with Qwen3-VL shim on GPU1 | 0 | `11213 MiB` | `8.15%` | `examples/worldgen/case000/gpu_profile_stage1_vlm.json` |
+| Stage1 true-VLM | `CUDA_VISIBLE_DEVICES=0 python -u traj_generate.py --target_path /tmp/hyworld_stage1_vlm --apply_nav_traj --apply_up_route --apply_recon_iteration --force_vlm --llm_addr localhost --llm_port 8000 --llm_name Qwen/Qwen3.5-4B` with Qwen3.5-4B shim on GPU1 | 0 | `11213 MiB` | `8.15%` | `examples/worldgen/case000/gpu_profile_stage1_vlm.json` |
 | Stage1 true-VLM | 同上；GPU1 runs `scripts/launch_vlm.sh` / `scripts/vlm_server.py` | 1 | `17995 MiB` | `2.20%` | `examples/worldgen/case000/gpu_profile_stage1_vlm.json` |
-| Stage2 render+caption | `CUDA_VISIBLE_DEVICES=0 torchrun --nproc_per_node=1 traj_render.py --target_path case000 --llm_addr localhost --llm_port 8000 --llm_name Qwen/Qwen3-VL-8B-Instruct` with Qwen3-VL shim on GPU1 | 0 | `3895 MiB` | `45.85%` | `examples/worldgen/case000/gpu_profile_stage2.json` |
+| Stage2 render+caption | `CUDA_VISIBLE_DEVICES=0 torchrun --nproc_per_node=1 traj_render.py --target_path case000 --llm_addr localhost --llm_port 8000 --llm_name Qwen/Qwen3.5-4B` with Qwen3.5-4B shim on GPU1 | 0 | `3895 MiB` | `45.85%` | `examples/worldgen/case000/gpu_profile_stage2.json` |
 | Stage2 render+caption | 同上；GPU1 runs `scripts/launch_vlm.sh` / `scripts/vlm_server.py` | 1 | `18395 MiB` | `40.55%` | `examples/worldgen/case000/gpu_profile_stage2.json` |
 | Stage3 resume/load | `torchrun --nproc_per_node=2 video_gen.py --target_path case000 --fsdp --skip_exist --local_files_only` | 0 | `23621 MiB` | `0.42%` | `examples/worldgen/case000/gpu_profile_stage3_skip_load.json` |
 | Stage3 resume/load | 同上 | 1 | `23621 MiB` | `1.31%` | `examples/worldgen/case000/gpu_profile_stage3_skip_load.json` |
@@ -325,7 +325,7 @@ Stage5 profile 输出质量指标：
 - 第三次重建中止点：Dockerfile 的 VLM shim 层注释声称使用 transformers shim，但实际执行 `pip install vllm`。这会重新引入已拒绝的 vLLM/FlashInfer/torch 版本风险并显著增加镜像体积，已改为由 `scripts/launch_vlm.sh` 直接使用镜像内 `hyworld2-pano` 环境运行 `scripts/vlm_server.py`。
 - 第四次重建成功：`docker build` 产出 `hyworld2-base:v1.0`，build-time import checks 通过：`hyworld2` 环境可导入 `torch/diffusers/transformers/recast/gsplat/worldrecon.pipeline`，`hyworld2-pano` 环境可导入 `pipeline/pipeline_with_qwen_image`。
 - Fresh container 验证成功：`python docker.py stop && python docker.py start && python docker.py verify` 通过；`docker.py verify` 会显式断言容器内 `HF_HOME=/models/.cache/huggingface`、`HUGGINGFACE_HUB_CACHE=/models/.cache/huggingface/hub`、`HF_ENDPOINT=https://hf-mirror.com`、`SAM3_REPO_ID=/models/sam3`、`WORLDSTEREO_REPO=/models/WorldStereo`、`WORLDMIRROR_MODEL=/models/HY-World-2.0`、`WS_TEXT_DTYPE=bf16`、`WS_AUX_OFFLOAD=1`、`WORLDMIRROR_NPROC_PER_NODE=1`、`WORLDMIRROR_TARGET_SIZE=512`、`WORLDMIRROR_CUDA_VISIBLE_DEVICES=0` 均为默认值。
-- VLM shim 轻量验证成功：`hyworld2-pano` 环境可导入 `fastapi`、`uvicorn`、`AutoModelForImageTextToText`、`AutoProcessor`；未在验证中加载完整 Qwen3-VL 权重。
+- VLM shim 轻量验证成功：`hyworld2-pano` 环境可导入 `fastapi`、`uvicorn`、`AutoModelForImageTextToText`、`AutoProcessor`；未在验证中加载完整 Qwen3.5-4B 权重。
 - 第五次重建成功：Dockerfile 使用清华 PyPI 镜像和预编译 flash-attn wheel 后，`docker build` 成功产出 `hyworld2-base:v1.0`；日志确认 `flash-attn-2.8.2+cu128torch2.7` 由 wheel 安装成功，`requirements_git.txt`、PyTorch3D CUDA build、navmesh 和 build-time import checks 均通过。
 - Fresh container GPU rasterizer 验证成功：`python docker.py stop && python docker.py start && python docker.py verify` 通过，`PyTorch3D CUDA rasterizer` runtime check 输出 `pytorch3d cuda rasterizer ok (1, 4, 4, 2)`。
 - 镜像构建成功：`python docker.py build` 产出 `hyworld2-base:v1.0`；容器为 Ubuntu `24.04`、CUDA `12.8` compiler build；build-time import checks 通过 `hyworld2` / `hyworld2-pano`。

@@ -44,6 +44,7 @@ python docker.py enter
 ```
 
 当前 Dockerfile 会把 CUDA 扩展同时编译进 A100、RTX 4090 和 RTX 5090 对应的 `sm_80/sm_89/sm_120` 架构。若要拉取其他镜像版本，用 `python docker.py pull --tag <version>`。
+`python docker.py build` 默认使用 Docker plain progress，并且 Dockerfile 里的 build-time `conda run` 都使用 `--no-capture-output`，便于实时看到 pip、编译和 smoke test 输出。手动调用 Docker 时也建议使用 `docker build --progress=plain ...`。
 
 常用宿主机命令：
 

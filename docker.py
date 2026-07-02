@@ -432,6 +432,7 @@ def build(args: argparse.Namespace) -> None:
     command = [
         "docker",
         "build",
+        "--progress=plain",
         "--file",
         str(dockerfile),
         "--tag",
@@ -1004,6 +1005,13 @@ def verify(args: argparse.Namespace) -> None:
             "\"import torch, diffusers, transformers, recast, gsplat; "
             "import hyworld2.worldrecon.pipeline; "
             "print('hyworld2 ok', torch.__version__, 'cuda', torch.cuda.is_available(), torch.cuda.device_count(), diffusers.__version__, transformers.__version__)\"",
+        ),
+        (
+            "objgen runtime",
+            "cd /workspace/hyworld2 && "
+            "/opt/miniconda3/bin/conda run -n hyworld2 python -c "
+            "\"import sam3d_objects; from hyworld2.objgen.inference import Inference; "
+            "print('objgen ok', sam3d_objects.__file__, Inference.__name__)\"",
         ),
         (
             "worldgen runtime defaults",
